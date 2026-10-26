@@ -1,3 +1,4 @@
+const { render } = require('./embed');
 const { fmt, plural } = require('./format');
 const { summarize } = require('./summary');
 
@@ -6,10 +7,13 @@ const MAX_TITLE = 80;
 const MAX_DESCRIPTION = 300;
 const CLEAR = '-';
 const LIST_LIMIT = 12;
+const MAX_LIST = 3900;
+const LIST_COLOR = 0x5865f2;
+const STALE_BOARD = ' The board could not be updated, so it may be out of date.';
 const RETRY_TEXT = "I couldn't confirm your bid with the wallet yet. It will be retried on its own, so check feature-mine in a few minutes before bidding again.";
 
-const shown = text => ({ text, hidden: false });
-const hiddenReply = text => ({ text, hidden: true });
+const shown = (text, embed) => ({ text, hidden: false, ...(embed ? { embed } : {}) });
+const hiddenReply = (text, embed) => ({ text, hidden: true, ...(embed ? { embed } : {}) });
 
 function totalsByFeature(bids) {
   const totals = new Map();
@@ -25,6 +29,20 @@ function totalsByFeature(bids) {
 const tidy = text => String(text || '').replace(/\s+/g, ' ').trim();
 const isId = id => Number.isSafeInteger(id) && id > 0;
 
+function bidList(lines) {
+  const items = [];
+  let length = 0;
+  lines.every((line) => {
+    const item = `- ${line}`;
+    if (length + item.length + 1 > MAX_LIST) return false;
+    items.push(item);
+    length += item.length + 1;
+    return true;
+  });
+  if (items.length < lines.length) items.push(`...and ${lines.length - items.length} more`);
+  return { title: 'Your bids', color: LIST_COLOR, description: items.join('\n') };
+}
+
 const totalOf = bids => bids.reduce((sum, bid) => sum + bid.amount, 0);
 
 module.exports = function createService({
@@ -34,10 +52,20 @@ module.exports = function createService({
   minBid = () => 10,
   linkURL,
   onChange = () => {},
+  refresh = async () => null,
   resync = async () => null,
   onError = console.error,
 }) {
   const inFlight = new Set();
+
+  const boardNote = async (id) => {
+    try {
+      return (await refresh(id)) === 'failed' ? STALE_BOARD : '';
+    } catch (error) {
+      onError(error);
+      return STALE_BOARD;
+    }
+  };
 
   const notLinked = linkURL
     ? `Your Discord account isn't linked to a wallet yet. Link it here: ${linkURL}`
@@ -107,15 +135,16 @@ module.exports = function createService({
     const summary = summarize(await store.bidsForFeature(id));
     const head = `#${id} ${feature.title} (${feature.status})`;
     const about = feature.description ? [feature.description] : [];
-    if (!summary.backers) return shown([head, ...about, 'No bids yet.'].join('\n'));
+    const embed = render({ ...feature, id }, summary);
+    if (!summary.backers) return shown([head, ...about, 'No bids yet.'].join('\n'), embed);
 
     const lines = [
       head,
       ...about,
       `${fmt(summary.total)} FMC from ${plural(summary.backers, 'bidder')}`,
     ];
-    if (summary.top) lines.push(`Top backer: ${summary.top.name} ${fmt(summary.top.amount)}`);
-    return shown(lines.join('\n'));
+    if (summary.top) lines.push(`Top public backer: ${summary.top.name} ${fmt(summary.top.amount)}`);
+    return shown(lines.join('\n'), embed);
   }
 
   async function mine(ctx) {
@@ -130,10 +159,12 @@ module.exports = function createService({
       const feature = features.get(id);
       const flags = [];
       if (mineHere.some(bid => bid.status === 'pending')) flags.push('pending');
-      if (mineHere.some(bid => bid.hidden)) flags.push('hidden');
+      const secret = totalOf(mineHere.filter(bid => bid.hidden));
+      if (secret && secret === totalOf(mineHere)) flags.push('all hidden');
+      else if (secret) flags.push(`${fmt(totalOf(mineHere) - secret)} public`, `${fmt(secret)} hidden`);
       return `#${id} ${feature ? feature.title : 'removed feature'}: ${fmt(totalOf(mineHere))} FMC${flags.length ? ` (${flags.join(', ')})` : ''}`;
     });
-    return hiddenReply(`Your bids:\n${lines.join('\n')}`);
+    return hiddenReply(`Your bids:\n${lines.join('\n')}`, bidList(lines));
   }
 
   async function placeBid(ctx, { id, amount, hidden }) {
@@ -166,8 +197,12 @@ module.exports = function createService({
       }
       if (!outcome.confirmed) return hiddenReply(refusal(outcome.error));
 
-      const total = totalOf((await store.bidsForFeature(id)).filter(item => item.status === 'confirmed'));
-      return hiddenReply(`Bid placed: ${fmt(amount)} FMC on #${id} ${feature.title}. It has ${fmt(total)} FMC behind it now.`);
+      const confirmed = (await store.bidsForFeature(id)).filter(item => item.status === 'confirmed');
+      const total = totalOf(confirmed);
+      const yours = totalOf(confirmed.filter(item => item.discordId === ctx.discordId));
+      const placedText = `Bid placed: ${fmt(amount)} FMC on #${id} ${feature.title}${hidden === true ? ' (hidden)' : ''}.`;
+      if (yours === amount) return hiddenReply(`${placedText} It has ${fmt(total)} FMC behind it now.`);
+      return hiddenReply(`${placedText} You have ${fmt(yours)} FMC on it now, and ${fmt(total)} FMC is behind it in total.`);
     } finally {
       inFlight.delete(ctx.discordId);
     }
@@ -181,8 +216,8 @@ module.exports = function createService({
     if (title.length > MAX_TITLE) return hiddenReply(`Keep the title under ${MAX_TITLE} characters.`);
     if (description.length > MAX_DESCRIPTION) return hiddenReply(`Keep the description under ${MAX_DESCRIPTION} characters.`);
     const id = await store.createFeature({ title, description, createdBy: ctx.discordId });
-    onChange(id);
-    return shown(`Added #${id}: ${title}. Bid on it with feature-bid ${id} <amount>.`);
+    const note = await boardNote(id);
+    return shown(`Added #${id}: ${title}. Bid on it with feature-bid ${id} <amount>.${note}`);
   }
 
   async function edit(ctx, { id, ...input }) {
@@ -209,8 +244,8 @@ module.exports = function createService({
       parts.push(description === CLEAR ? 'the description was removed' : 'the description was updated');
     }
     await store.updateFeature(id, changes);
-    onChange(id);
-    return hiddenReply(`#${id}: ${parts.join(', and ')}.`);
+    const note = await boardNote(id);
+    return hiddenReply(`#${id}: ${parts.join(', and ')}.${note}`);
   }
 
   async function done(ctx, { id }) {
@@ -220,10 +255,10 @@ module.exports = function createService({
     if (feature.status !== 'open') return hiddenReply(`#${id} is already ${feature.status}.`);
 
     await store.setFeatureStatus(id, 'done', ctx.discordId);
-    onChange(id);
+    const note = await boardNote(id);
     const confirmed = (await store.bidsForFeature(id)).filter(item => item.status === 'confirmed');
     const backers = new Set(confirmed.map(item => item.discordId)).size;
-    return shown(`#${id} ${feature.title} is done! ${plural(backers, 'bidder')} put ${fmt(totalOf(confirmed))} FMC behind it.`);
+    return shown(`#${id} ${feature.title} is done! ${plural(backers, 'bidder')} put ${fmt(totalOf(confirmed))} FMC behind it.${note}`);
   }
 
   async function remove(ctx, { id }) {
@@ -235,8 +270,8 @@ module.exports = function createService({
     if (live.length) return hiddenReply(`#${id} has bids, and refunds aren't available yet, so it can't be removed.`);
 
     await store.setFeatureStatus(id, 'removed', ctx.discordId);
-    onChange(id);
-    return hiddenReply(`Removed #${id}: ${feature.title}.`);
+    const note = await boardNote(id);
+    return hiddenReply(`Removed #${id}: ${feature.title}.${note}`);
   }
 
   async function sync(ctx) {

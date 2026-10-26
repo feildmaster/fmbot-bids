@@ -6,7 +6,8 @@ const createStore = require('../src/store');
 const { summarize } = require('../src/summary');
 const createFakeFirestore = require('./helpers/fakeFirestore');
 
-const { render } = createBoard;
+const { render } = require('../src/embed');
+
 const TARGET = { channel: '555', cid: 'fmbot-cid' };
 
 let fake;
@@ -109,7 +110,7 @@ test('a backed feature shows the total, the bidders and the top public backer', 
 
   assert.deepEqual(embed.fields, [
     { name: 'Backed by', value: '2,000 FMC from 2 bidders', inline: true },
-    { name: 'Top backer', value: 'Alan 1,500', inline: true },
+    { name: 'Top public backer', value: 'Alan 1,500', inline: true },
   ]);
   assert.equal(JSON.stringify(embed).includes('Sam'), false);
 });
@@ -400,6 +401,46 @@ test('an old message that cannot be deleted is reported but the move still goes 
   assert.equal(errors.length, 1);
   assert.match(errors[0], /Access Denied/);
   assert.equal((await store.getFeature(id)).board.channel, '777');
+});
+
+test('syncNow updates at once instead of waiting, and says it worked', async () => {
+  const id = await addFeature();
+  board.touch(id);
+
+  const result = await board.syncNow(id);
+
+  assert.equal(result, 'updated');
+  assert.equal(requests.length, 1);
+  assert.equal(timers.count(), 0);
+  assert.deepEqual((await store.getFeature(id)).board, { channel: '555', id: 'msg-0', cid: 'fmbot-cid' });
+});
+
+test('syncNow says when the board could not be updated, and reports why', async () => {
+  const id = await addFeature();
+  answer = () => ({ reject: 'Access Denied' });
+
+  assert.equal(await board.syncNow(id), 'failed');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Access Denied/);
+});
+
+test('syncNow does nothing without a board', async () => {
+  const id = await addFeature();
+  board.configure(null);
+
+  assert.equal(await board.syncNow(id), null);
+  assert.equal(requests.length, 0);
+});
+
+test('syncNow waits behind an update already running for the feature', async () => {
+  const id = await addFeature();
+  board.touch(id);
+  timers.fire();
+
+  const result = await board.syncNow(id);
+
+  assert.equal(result, 'updated');
+  assert.deepEqual(requests.map(r => r.command), ['post-message', 'edit-message']);
 });
 
 test('configuring the same board again is not a change', () => {

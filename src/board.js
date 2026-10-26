@@ -1,39 +1,9 @@
-const { fmt, plural } = require('./format');
+const { render } = require('./embed');
 const { summarize } = require('./summary');
 
 const DEBOUNCE = 3000;
 const SHOWN = ['open', 'done'];
 const GONE = ['Unknown message', 'Unknown channel'];
-const COLORS = { open: 0x5865f2, done: 0x57f287, removed: 0xed4245 };
-const FOOTERS = {
-  open: id => `Open for bids · feature-bid ${id} <amount>`,
-  done: () => 'Built',
-  removed: () => 'Removed',
-};
-
-function render(feature, summary) {
-  const fields = [];
-  if (feature.status !== 'removed') {
-    fields.push({
-      name: 'Backed by',
-      value: `${fmt(summary.total)} FMC from ${plural(summary.backers, 'bidder')}`,
-      inline: true,
-    });
-    if (summary.top) {
-      fields.push({ name: 'Top backer', value: `${summary.top.name} ${fmt(summary.top.amount)}`, inline: true });
-    }
-  }
-
-  const embed = {
-    title: `#${feature.id} ${feature.title}`,
-    color: COLORS[feature.status],
-    fields,
-    footer: { text: FOOTERS[feature.status](feature.id) },
-  };
-  if (feature.description) embed.description = feature.description;
-  return embed;
-}
-
 module.exports = function createBoard({
   store,
   request,
@@ -120,6 +90,18 @@ module.exports = function createBoard({
 
     isConfigured: () => target !== null,
 
+    async syncNow(id) {
+      if (!target) return null;
+      clearTimer(timers.get(id));
+      timers.delete(id);
+      let failed = false;
+      await enqueue(id, () => syncOne(id).catch((error) => {
+        failed = true;
+        throw error;
+      }));
+      return failed ? 'failed' : 'updated';
+    },
+
     touch(id) {
       if (!target) return;
       clearTimer(timers.get(id));
@@ -144,5 +126,3 @@ module.exports = function createBoard({
     },
   };
 };
-
-module.exports.render = render;

@@ -1,4 +1,4 @@
-module.exports = function privateReply({ cid }, msg, text) {
+module.exports = function privateReply({ cid }, msg, text, embed) {
   const reply = {
     uid: cid,
     target: msg.cid,
@@ -7,6 +7,9 @@ module.exports = function privateReply({ cid }, msg, text) {
     type: 'private',
     timeReceived: Date.now(),
   };
-  if (msg.data && msg.data.interactionId) reply.data = { interactionId: msg.data.interactionId };
+  const data = {};
+  if (msg.data && msg.data.interactionId) data.interactionId = msg.data.interactionId;
+  if (embed) data.discord_embed = embed;
+  if (Object.keys(data).length) reply.data = data;
   return reply;
 };

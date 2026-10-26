@@ -106,6 +106,33 @@ test('a description cannot be very long', async () => {
   assert.match(limit.text, /^Added #1: B\./);
 });
 
+test('feature-show carries the same embed the board shows', async () => {
+  await run('feature-add', admin, { title: 'Dark mode', description: 'For night owls' });
+  await bidOn(alan, 1, 100);
+  await bidOn(sam, 1, 60, true);
+
+  const reply = await run('feature-show', alan, { id: 1 });
+
+  assert.equal(reply.hidden, false);
+  assert.deepEqual(reply.embed, {
+    title: '#1 Dark mode',
+    description: 'For night owls',
+    color: 0x5865f2,
+    fields: [
+      { name: 'Backed by', value: '160 FMC from 2 bidders', inline: true },
+      { name: 'Top public backer', value: 'Alan 100', inline: true },
+    ],
+    footer: { text: 'Open for bids · feature-bid 1 <amount>' },
+  });
+});
+
+test('feature-show on a feature with no bids still has an embed, and a missing one has none', async () => {
+  await addFeature('Dark mode');
+
+  assert.equal((await run('feature-show', alan, { id: 1 })).embed.fields[0].value, '0 FMC from 0 bidders');
+  assert.equal('embed' in (await run('feature-show', alan, { id: 9 })), false);
+});
+
 test('feature-show includes the description when there is one', async () => {
   await run('feature-add', admin, { title: 'Dark mode', description: 'For night owls' });
   await addFeature('Export');
@@ -116,7 +143,7 @@ test('feature-show includes the description when there is one', async () => {
 
 test('an admin can change a title, and the board is told', async () => {
   const changed = [];
-  service = build({ onChange: id => changed.push(id) });
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
   await addFeature('Dark mod');
   changed.length = 0;
 
@@ -131,7 +158,7 @@ test('an admin can change a title, and the board is told', async () => {
 
 test('an admin can set, change and clear a description without touching the title', async () => {
   const changed = [];
-  service = build({ onChange: id => changed.push(id) });
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
   await addFeature('Dark mode');
   changed.length = 0;
 
@@ -270,6 +297,19 @@ test('bids with an unusable feature or amount are refused and never charged', as
   replies.slice(0, 5).forEach(reply => assert.deepEqual(reply, { text: 'The smallest bid is 10 FMC.', hidden: true }));
   replies.slice(5).forEach((reply, at) => assert.equal(reply.hidden, true, String(at)));
   assert.equal(charges.length, 0);
+});
+
+test('a bid says it was hidden, and what you have on the feature once you have bid before', async () => {
+  await addFeature('Dark mode');
+  const first = await bidOn(alan, 1, 99, true);
+  const again = await bidOn(alan, 1, 100, true);
+  const other = await bidOn(sam, 1, 50);
+  const more = await bidOn(alan, 1, 10);
+
+  assert.equal(first.text, 'Bid placed: 99 FMC on #1 Dark mode (hidden). It has 99 FMC behind it now.');
+  assert.equal(again.text, 'Bid placed: 100 FMC on #1 Dark mode (hidden). You have 199 FMC on it now, and 199 FMC is behind it in total.');
+  assert.equal(other.text, 'Bid placed: 50 FMC on #1 Dark mode. It has 249 FMC behind it now.');
+  assert.equal(more.text, 'Bid placed: 10 FMC on #1 Dark mode. You have 209 FMC on it now, and 259 FMC is behind it in total.');
 });
 
 test('a bid below the minimum is refused, and the minimum can change', async () => {
@@ -420,10 +460,11 @@ test('showing a feature names only its highest public bidder', async () => {
   await bidOn(sam, 1, 200);
   await bidOn(alan, 1, 100);
 
-  assert.deepEqual(await run('feature-show', sam, { id: 1 }), {
-    text: '#1 Dark mode (open)\n800 FMC from 2 bidders\nTop backer: Alan 600',
-    hidden: false,
-  });
+  const reply = await run('feature-show', sam, { id: 1 });
+
+  assert.equal(reply.text, '#1 Dark mode (open)\n800 FMC from 2 bidders\nTop public backer: Alan 600');
+  assert.equal(reply.hidden, false);
+  assert.deepEqual(reply.embed.fields.map(field => field.value), ['800 FMC from 2 bidders', 'Alan 600']);
 });
 
 test('nobody else is named, however many people bid', async () => {
@@ -437,7 +478,7 @@ test('nobody else is named, however many people bid', async () => {
 
   assert.equal(lines.length, 3);
   assert.equal(lines[1], '210 FMC from 6 bidders');
-  assert.equal(lines[2], 'Top backer: User6 60');
+  assert.equal(lines[2], 'Top public backer: User6 60');
 });
 
 test('a tie for the top goes to whoever bid first', async () => {
@@ -445,7 +486,7 @@ test('a tie for the top goes to whoever bid first', async () => {
   await bidOn(sam, 1, 100);
   await bidOn(alan, 1, 100);
 
-  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top public backer: Sam 100');
 });
 
 test('a tie goes to whoever reached the amount first, not whoever started first', async () => {
@@ -454,7 +495,7 @@ test('a tie goes to whoever reached the amount first, not whoever started first'
   await bidOn(sam, 1, 100);
   await bidOn(alan, 1, 50);
 
-  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top public backer: Sam 100');
 });
 
 test('hidden bids do not decide who reached an amount first', async () => {
@@ -464,7 +505,7 @@ test('hidden bids do not decide who reached an amount first', async () => {
   await bidOn(alan, 1, 20, 'hidden');
   await bidOn(sam, 1, 5, 'hidden');
 
-  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top public backer: Alan 100');
 });
 
 test('bids with the same time fall back to the name that comes first', async () => {
@@ -475,7 +516,7 @@ test('bids with the same time fall back to the name that comes first', async () 
     if (path.startsWith('bids/')) fake.data.set(path, { ...bid, createdAt: 7 });
   });
 
-  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top public backer: Alan 100');
 });
 
 test('firestore timestamps are understood as well as plain numbers', async () => {
@@ -491,7 +532,7 @@ test('firestore timestamps are understood as well as plain numbers', async () =>
   };
   service = build({ store: stamped });
 
-  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top public backer: Sam 100');
 });
 
 test('a hidden bid keeps its name and amount off the list but still counts', async () => {
@@ -501,7 +542,7 @@ test('a hidden bid keeps its name and amount off the list but still counts', asy
   const shown = (await run('feature-show', sam, { id: 1 })).text;
 
   assert.match(hidden.text, /^Bid placed: 555 FMC/);
-  assert.equal(shown, '#1 Dark mode (open)\n755 FMC from 2 bidders\nTop backer: Sam 200');
+  assert.equal(shown, '#1 Dark mode (open)\n755 FMC from 2 bidders\nTop public backer: Sam 200');
   assert.equal(shown.includes('Alan'), false);
   assert.equal(shown.includes('555'), false);
   assert.equal(shown.includes('hidden'), false);
@@ -512,7 +553,7 @@ test('a hidden bid bigger than every public one never becomes the top backer', a
   await bidOn(alan, 1, 900, 'hidden');
   await bidOn(sam, 1, 30);
 
-  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 30');
+  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top public backer: Sam 30');
 });
 
 test('when every bid is hidden nobody is named at all', async () => {
@@ -531,7 +572,7 @@ test('someone who bids openly and in secret is only credited for the open bids',
   await bidOn(alan, 1, 100);
   await bidOn(alan, 1, 700, 'hidden');
 
-  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top public backer: Alan 100');
 });
 
 test('a feature with no bids and unknown features are handled', async () => {
@@ -555,11 +596,52 @@ test('your own bids are listed privately, with hidden and pending ones marked', 
   outcome = { error: 'Balance insufficient' };
   await bidOn(alan, 2, 900);
 
-  assert.deepEqual(await run('feature-mine', alan), {
-    text: 'Your bids:\n#1 Dark mode: 150 FMC (hidden)\n#2 Export: 30 FMC (pending)',
-    hidden: true,
+  const reply = await run('feature-mine', alan);
+
+  assert.equal(reply.text, 'Your bids:\n#1 Dark mode: 150 FMC (100 public, 50 hidden)\n#2 Export: 30 FMC (pending)');
+  assert.equal(reply.hidden, true);
+  assert.deepEqual(reply.embed, {
+    title: 'Your bids',
+    color: 0x5865f2,
+    description: '- #1 Dark mode: 150 FMC (100 public, 50 hidden)\n- #2 Export: 30 FMC (pending)',
   });
   assert.deepEqual(await run('feature-mine', sam), { text: "You haven't bid on anything yet.", hidden: true });
+});
+
+test('a long list of bids stops before the embed limit and says how many were left out', async () => {
+  const features = Array.from({ length: 80 }, (_, n) => n + 1);
+  await features.reduce((chain, n) => chain
+    .then(() => addFeature(`Feature number ${n} with a fairly long title to take space up`)), Promise.resolve());
+  await features.reduce((chain, n) => chain.then(() => bidOn(alan, n, 10)), Promise.resolve());
+
+  const { embed } = await run('feature-mine', alan);
+  const lines = embed.description.split('\n');
+
+  assert.equal(embed.description.length < 4096, true);
+  assert.match(lines[lines.length - 1], /^\.\.\.and \d+ more$/);
+  const listed = lines.length - 1;
+  const left = Number(/\d+/.exec(lines[listed])[0]);
+  assert.equal(listed + left, 80);
+  assert.match(lines[0], /^- #1 /);
+});
+
+test('someone with no bids gets a plain answer, not an empty embed', async () => {
+  assert.equal('embed' in (await run('feature-mine', sam)), false);
+});
+
+test('your bids say how much of each feature is public and how much is hidden', async () => {
+  await addFeature('Dark mode');
+  await addFeature('Export');
+  await addFeature('Import');
+  await bidOn(alan, 1, 99);
+  await bidOn(alan, 1, 100, true);
+  await bidOn(alan, 2, 1500, true);
+  await bidOn(alan, 3, 40);
+
+  assert.equal(
+    (await run('feature-mine', alan)).text,
+    'Your bids:\n#1 Dark mode: 199 FMC (99 public, 100 hidden)\n#2 Export: 1,500 FMC (all hidden)\n#3 Import: 40 FMC',
+  );
 });
 
 test('finishing a feature closes it, announces it, and keeps the bids', async () => {
@@ -628,7 +710,10 @@ test('every command in the definitions has a handler that answers', async () => 
 
 test('the board is told about every change that matters, once each', async () => {
   const changes = [];
-  service = build({ onChange: id => changes.push(id) });
+  service = build({
+    onChange: id => changes.push(`bid ${id}`),
+    refresh: async (id) => { changes.push(`admin ${id}`); return 'updated'; },
+  });
 
   await addFeature('A');
   await bidOn(alan, 1, 50);
@@ -636,7 +721,55 @@ test('the board is told about every change that matters, once each', async () =>
   await addFeature('B');
   await run('feature-remove', admin, { id: 2 });
 
-  assert.deepEqual(changes, [1, 1, 1, 2, 2]);
+  assert.deepEqual(changes, ['admin 1', 'bid 1', 'admin 1', 'admin 2', 'admin 2']);
+});
+
+test('an admin command waits for the board before it answers', async () => {
+  const order = [];
+  service = build({
+    refresh: async () => {
+      await settle();
+      order.push('board');
+      return 'updated';
+    },
+  });
+
+  await addFeature('A').then(() => order.push('answer'));
+
+  assert.deepEqual(order, ['board', 'answer']);
+});
+
+test('an admin is told when the board could not be updated, and the change stays', async () => {
+  service = build({ refresh: async () => 'failed' });
+  const stale = ' The board could not be updated, so it may be out of date.';
+
+  const added = await addFeature('A');
+  const edited = await run('feature-edit', admin, { id: 1, title: 'B' });
+  const finished = await run('feature-done', admin, { id: 1 });
+  await addFeature('C');
+  const removed = await run('feature-remove', admin, { id: 2 });
+
+  assert.equal(added.text, `Added #1: A. Bid on it with feature-bid 1 <amount>.${stale}`);
+  assert.equal(edited.text, `#1: the title is now "B".${stale}`);
+  assert.match(finished.text, /put 0 FMC behind it. The board could not be updated/);
+  assert.equal(removed.text, `Removed #2: C.${stale}`);
+  assert.equal((await store.getFeature(1)).title, 'B');
+});
+
+test('a board that throws is reported and does not undo the change', async () => {
+  service = build({ refresh: async () => { throw new Error('down'); } });
+
+  const reply = await addFeature('A');
+
+  assert.match(reply.text, /The board could not be updated/);
+  assert.deepEqual(errors, ['down']);
+  assert.equal((await store.getFeature(1)).title, 'A');
+});
+
+test('no board, or a board that is up to date, adds nothing to the answer', async () => {
+  const none = build({ refresh: async () => null });
+  service = none;
+  assert.equal((await addFeature('A')).text, 'Added #1: A. Bid on it with feature-bid 1 <amount>.');
 });
 
 test('a bid the wallet refuses, a failed bid and a pending bid do not touch the board', async () => {

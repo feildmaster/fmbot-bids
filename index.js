@@ -48,6 +48,7 @@ const service = createService({
   minBid: () => minimum,
   linkURL: process.env.WALLET_LINK_URL,
   onChange: id => board.touch(id),
+  refresh: id => board.syncNow(id),
   resync: () => board.reconcile(),
   onError: report,
 });
@@ -65,9 +66,12 @@ plugin.messageSystem().on('message/command', (msg) => {
 
   const context = { discordId: msg.uid, name: msg.data.nick || msg.uid };
   service.run(msg.data.command, context, msg.data.args)
-    .then(({ text, hidden }) => {
-      if (hidden) return plugin.messageSystem().sendMessage(privateReply(plugin, msg, text));
-      return plugin.messageSystem().sendText(text, msg);
+    .then(({ text, hidden, embed }) => {
+      if (hidden) {
+        return plugin.messageSystem().sendMessage(privateReply(plugin, msg, text, embed));
+      }
+      const data = embed ? { discord_embed: embed } : undefined;
+      return plugin.messageSystem().sendText(text, msg, data);
     })
     .catch(report);
 });
