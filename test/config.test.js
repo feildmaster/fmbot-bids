@@ -66,3 +66,41 @@ test('a minimum that makes no sense falls back to the default', () => {
     assert.equal(parseConfig({ minBid }).minBid, 10, String(minBid));
   });
 });
+
+test('the board needs a channel and a connector, written as text', () => {
+  const { board, boardProblem } = parseConfig({ board: { channel: '429383061965373443', cid: 'fmbot-cid' } });
+
+  assert.deepEqual(board, { channel: '429383061965373443', cid: 'fmbot-cid' });
+  assert.equal(boardProblem, undefined);
+});
+
+test('spaces around the board settings are ignored', () => {
+  assert.deepEqual(
+    parseConfig({ board: { channel: ' 429383061965373443 ', cid: ' fmbot-cid ' } }).board,
+    { channel: '429383061965373443', cid: 'fmbot-cid' },
+  );
+});
+
+test('no board setting means no board and nothing to report', () => {
+  [{}, { board: null }, undefined].forEach((config) => {
+    const parsed = parseConfig(config);
+    assert.equal(parsed.board, null);
+    assert.equal(parsed.boardProblem, undefined);
+  });
+});
+
+test('a board setting that cannot work is reported and ignored', () => {
+  [
+    { board: { channel: 429383061965373443, cid: 'fmbot-cid' } },
+    { board: { channel: '429383061965373443' } },
+    { board: { channel: '429383061965373443', cid: '' } },
+    { board: { channel: 'general', cid: 'fmbot-cid' } },
+    { board: 'general' },
+    { board: {} },
+    { board: [] },
+  ].forEach((config) => {
+    const parsed = parseConfig(config);
+    assert.equal(parsed.board, null, JSON.stringify(config));
+    assert.match(parsed.boardProblem, /channel id and a connector cid/, JSON.stringify(config));
+  });
+});

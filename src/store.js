@@ -10,7 +10,7 @@ module.exports = function createStore({ db, FieldValue }) {
   };
 
   return {
-    async createFeature({ title, createdBy }) {
+    async createFeature({ title, description, createdBy }) {
       const counter = db.doc('counters/features');
       return db.runTransaction(async (t) => {
         const snapshot = await t.get(counter);
@@ -18,6 +18,7 @@ module.exports = function createStore({ db, FieldValue }) {
         t.set(counter, { next: id + 1 });
         t.set(features().doc(String(id)), {
           title,
+          ...(description ? { description } : {}),
           status: 'open',
           createdBy,
           createdAt: FieldValue.serverTimestamp(),
@@ -32,6 +33,19 @@ module.exports = function createStore({ db, FieldValue }) {
     },
 
     listFeatures: status => query(features(), 'status', status),
+
+    updateFeature(id, { title, description }) {
+      const fields = {};
+      if (title !== undefined) fields.title = title;
+      if (description !== undefined) {
+        fields.description = description === null ? FieldValue.delete() : description;
+      }
+      return features().doc(String(id)).update(fields);
+    },
+
+    setFeatureBoard(id, board) {
+      return features().doc(String(id)).update({ board });
+    },
 
     setFeatureStatus(id, status, by) {
       return features().doc(String(id)).update({

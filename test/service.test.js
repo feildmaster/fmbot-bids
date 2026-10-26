@@ -32,10 +32,11 @@ const build = (options = {}) => createService({
   ...options,
 });
 
-const run = (command, ctx, words = [], rest = words.join(' ')) => service
-  .run(command, ctx, { words, rest });
-const addFeature = title => run('feature-add', admin, [], title);
-const bidOn = (ctx, id, amount, ...more) => run('feature-bid', ctx, [String(id), String(amount), ...more]);
+const run = (command, ctx, args = {}) => service.run(command, ctx, args);
+const addFeature = title => run('feature-add', admin, { title });
+const bidOn = (ctx, id, amount, hidden) => run('feature-bid', ctx, {
+  id, amount, ...(hidden ? { hidden: true } : {}),
+});
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const user = n => ({ discordId: `10${n}`, name: `User${n}` });
 
@@ -61,10 +62,10 @@ test('only the people on the admin list can add, finish or remove features', asy
   await addFeature('Dark mode');
 
   const replies = await Promise.all([
-    run('feature-add', alan, [], 'Sneaky'),
-    run('feature-done', alan, ['1']),
-    run('feature-remove', alan, ['1']),
-    run('feature-add', { ...alan, admin: true }, [], 'Still sneaky'),
+    run('feature-add', alan, { title: 'Sneaky' }),
+    run('feature-done', alan, { id: 1 }),
+    run('feature-remove', alan, { id: 1 }),
+    run('feature-add', { ...alan, admin: true }, { title: 'Still sneaky' }),
   ]);
 
   replies.forEach(reply => assert.deepEqual(reply, { text: 'Only admins can do that.', hidden: true }));
@@ -73,18 +74,115 @@ test('only the people on the admin list can add, finish or remove features', asy
 });
 
 test('a title is required and cannot be very long', async () => {
-  const none = await run('feature-add', admin, [], '   ');
-  const long = await run('feature-add', admin, [], 'x'.repeat(81));
-  const limit = await run('feature-add', admin, [], 'x'.repeat(80));
+  const none = await run('feature-add', admin, { title: '   ' });
+  const missing = await run('feature-add', admin, {});
+  const long = await run('feature-add', admin, { title: 'x'.repeat(81) });
+  const limit = await run('feature-add', admin, { title: 'x'.repeat(80) });
 
-  assert.equal(none.text, 'Usage: feature-add <title>');
+  assert.equal(none.text, 'A feature needs a title.');
+  assert.equal(missing.text, 'A feature needs a title.');
   assert.equal(long.text, 'Keep the title under 80 characters.');
   assert.match(limit.text, /^Added #1: x{80}\./);
 });
 
+test('a description is optional and is tidied like the title', async () => {
+  const withOne = await run('feature-add', admin, { title: 'Dark mode', description: '  For   night owls ' });
+  const without = await run('feature-add', admin, { title: 'Export' });
+  const empty = await run('feature-add', admin, { title: 'Import', description: '   ' });
+
+  assert.equal(withOne.text, 'Added #1: Dark mode. Bid on it with feature-bid 1 <amount>.');
+  assert.equal((await store.getFeature(1)).description, 'For night owls');
+  assert.equal(without.hidden, false);
+  assert.equal('description' in (await store.getFeature(2)), false);
+  assert.equal('description' in (await store.getFeature(3)), false);
+  assert.match(empty.text, /^Added #3: Import\./);
+});
+
+test('a description cannot be very long', async () => {
+  const long = await run('feature-add', admin, { title: 'A', description: 'x'.repeat(301) });
+  const limit = await run('feature-add', admin, { title: 'B', description: 'x'.repeat(300) });
+
+  assert.equal(long.text, 'Keep the description under 300 characters.');
+  assert.match(limit.text, /^Added #1: B\./);
+});
+
+test('feature-show includes the description when there is one', async () => {
+  await run('feature-add', admin, { title: 'Dark mode', description: 'For night owls' });
+  await addFeature('Export');
+
+  assert.equal((await run('feature-show', alan, { id: 1 })).text, '#1 Dark mode (open)\nFor night owls\nNo bids yet.');
+  assert.equal((await run('feature-show', alan, { id: 2 })).text, '#2 Export (open)\nNo bids yet.');
+});
+
+test('an admin can change a title, and the board is told', async () => {
+  const changed = [];
+  service = build({ onChange: id => changed.push(id) });
+  await addFeature('Dark mod');
+  changed.length = 0;
+
+  const reply = await run('feature-edit', admin, { id: 1, title: ' Dark   mode ' });
+
+  assert.deepEqual(reply, { text: '#1: the title is now "Dark mode".', hidden: true });
+  const feature = await store.getFeature(1);
+  assert.equal(feature.title, 'Dark mode');
+  assert.equal('description' in feature, false);
+  assert.deepEqual(changed, [1]);
+});
+
+test('an admin can set, change and clear a description without touching the title', async () => {
+  const changed = [];
+  service = build({ onChange: id => changed.push(id) });
+  await addFeature('Dark mode');
+  changed.length = 0;
+
+  const set = await run('feature-edit', admin, { id: 1, description: ' For   night owls' });
+  assert.equal(set.text, '#1: the description was updated.');
+  assert.equal((await store.getFeature(1)).description, 'For night owls');
+
+  await run('feature-edit', admin, { id: 1, description: 'Easier on the eyes' });
+  assert.equal((await store.getFeature(1)).description, 'Easier on the eyes');
+
+  const cleared = await run('feature-edit', admin, { id: 1, description: '-' });
+  assert.equal(cleared.text, '#1: the description was removed.');
+  const feature = await store.getFeature(1);
+  assert.equal('description' in feature, false);
+  assert.equal(feature.title, 'Dark mode');
+  assert.deepEqual(changed, [1, 1, 1]);
+});
+
+test('the title and the description can change together', async () => {
+  await run('feature-add', admin, { title: 'Dark mod', description: 'Old' });
+
+  const reply = await run('feature-edit', admin, { id: 1, title: 'Dark mode', description: 'New' });
+
+  assert.equal(reply.text, '#1: the title is now "Dark mode", and the description was updated.');
+  const feature = await store.getFeature(1);
+  assert.equal(feature.title, 'Dark mode');
+  assert.equal(feature.description, 'New');
+});
+
+test('an edit needs an admin, a real feature, something to change and sensible lengths', async () => {
+  await addFeature('Dark mode');
+  await run('feature-remove', admin, { id: 1 });
+  await addFeature('Export');
+  const nothing = 'Give a new title, a new description, or both. Use - as the description to remove it.';
+
+  assert.equal((await run('feature-edit', alan, { id: 2, title: 'X' })).text, 'Only admins can do that.');
+  assert.equal((await run('feature-edit', admin, { id: 1, title: 'X' })).text, 'There is no feature #1.');
+  assert.equal((await run('feature-edit', admin, { id: 9, description: 'X' })).text, 'There is no feature #9.');
+  assert.equal((await run('feature-edit', admin, { id: 0, title: 'X' })).text, 'There is no feature #0.');
+  assert.equal((await run('feature-edit', admin, { id: 2 })).text, nothing);
+  assert.equal((await run('feature-edit', admin, { id: 2, title: ' ', description: ' ' })).text, nothing);
+  assert.equal((await run('feature-edit', admin, { id: 2, title: 'x'.repeat(81) })).text, 'Keep the title under 80 characters.');
+  assert.equal((await run('feature-edit', admin, { id: 2, description: 'x'.repeat(301) })).text, 'Keep the description under 300 characters.');
+  const feature = await store.getFeature(2);
+  assert.equal(feature.title, 'Export');
+  assert.equal('description' in feature, false);
+});
+
 test('the list says so when nothing is open', async () => {
   assert.equal((await run('feature-list', alan)).text, 'No features are open for bids yet.');
-  assert.equal((await run('feature-list', alan, ['done'])).text, 'No bid has built a feature yet.');
+  assert.equal((await run('feature-list', alan, { status: 'done' })).text, 'No bid has built a feature yet.');
 });
 
 test('the list puts the most backed feature first and counts bidders', async () => {
@@ -125,7 +223,7 @@ test('the list shows a dozen features and says how many more there are', async (
 });
 
 test('the list only understands open and done', async () => {
-  assert.equal((await run('feature-list', alan, ['everything'])).text, 'Use feature-list open or feature-list done.');
+  assert.equal((await run('feature-list', alan, { status: 'everything' })).text, 'Use feature-list open or feature-list done.');
 });
 
 test('a bid charges the bidder through the wallet and answers privately', async () => {
@@ -154,21 +252,23 @@ test('totals add up across people', async () => {
   assert.equal((await bidOn(sam, 1, 300)).text, 'Bid placed: 300 FMC on #1 Dark mode. It has 800 FMC behind it now.');
 });
 
-test('badly formed bids are explained and never charged', async () => {
+test('bids with an unusable feature or amount are refused and never charged', async () => {
   await addFeature('Dark mode');
-  const usage = 'Usage: feature-bid <number> <amount> [hidden]';
 
   const replies = await Promise.all([
-    run('feature-bid', alan, []),
-    run('feature-bid', alan, ['1']),
-    run('feature-bid', alan, ['abc', '50']),
-    run('feature-bid', alan, ['1', 'lots']),
-    run('feature-bid', alan, ['1', '0']),
-    run('feature-bid', alan, ['1', '-50']),
-    run('feature-bid', alan, ['1', '5.5']),
+    run('feature-bid', alan, { id: 1, amount: 0 }),
+    run('feature-bid', alan, { id: 1, amount: -50 }),
+    run('feature-bid', alan, { id: 1, amount: 5.5 }),
+    run('feature-bid', alan, { id: 1, amount: Number.MAX_SAFE_INTEGER + 2 }),
+    run('feature-bid', alan, { id: 1 }),
+    run('feature-bid', alan, { id: 0, amount: 50 }),
+    run('feature-bid', alan, { id: -3, amount: 50 }),
+    run('feature-bid', alan, { id: 1.5, amount: 50 }),
+    run('feature-bid', alan),
   ]);
 
-  replies.forEach(reply => assert.deepEqual(reply, { text: usage, hidden: true }));
+  replies.slice(0, 5).forEach(reply => assert.deepEqual(reply, { text: 'The smallest bid is 10 FMC.', hidden: true }));
+  replies.slice(5).forEach((reply, at) => assert.equal(reply.hidden, true, String(at)));
   assert.equal(charges.length, 0);
 });
 
@@ -187,8 +287,8 @@ test('you cannot bid on a feature that does not exist, is closed, or was removed
   await addFeature('Open');
   await addFeature('Finished');
   await addFeature('Gone');
-  await run('feature-done', admin, ['2']);
-  await run('feature-remove', admin, ['3']);
+  await run('feature-done', admin, { id: 2 });
+  await run('feature-remove', admin, { id: 3 });
 
   assert.equal((await bidOn(alan, 7, 50)).text, 'There is no feature #7.');
   assert.equal((await bidOn(alan, 2, 50)).text, 'Bidding on #2 is closed.');
@@ -320,7 +420,7 @@ test('showing a feature names only its highest public bidder', async () => {
   await bidOn(sam, 1, 200);
   await bidOn(alan, 1, 100);
 
-  assert.deepEqual(await run('feature-show', sam, ['1']), {
+  assert.deepEqual(await run('feature-show', sam, { id: 1 }), {
     text: '#1 Dark mode (open)\n800 FMC from 2 bidders\nTop backer: Alan 600',
     hidden: false,
   });
@@ -333,7 +433,7 @@ test('nobody else is named, however many people bid', async () => {
     Promise.resolve(),
   );
 
-  const lines = (await run('feature-show', alan, ['1'])).text.split('\n');
+  const lines = (await run('feature-show', alan, { id: 1 })).text.split('\n');
 
   assert.equal(lines.length, 3);
   assert.equal(lines[1], '210 FMC from 6 bidders');
@@ -345,7 +445,7 @@ test('a tie for the top goes to whoever bid first', async () => {
   await bidOn(sam, 1, 100);
   await bidOn(alan, 1, 100);
 
-  assert.equal((await run('feature-show', alan, ['1'])).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
 });
 
 test('a tie goes to whoever reached the amount first, not whoever started first', async () => {
@@ -354,7 +454,7 @@ test('a tie goes to whoever reached the amount first, not whoever started first'
   await bidOn(sam, 1, 100);
   await bidOn(alan, 1, 50);
 
-  assert.equal((await run('feature-show', alan, ['1'])).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
 });
 
 test('hidden bids do not decide who reached an amount first', async () => {
@@ -364,7 +464,7 @@ test('hidden bids do not decide who reached an amount first', async () => {
   await bidOn(alan, 1, 20, 'hidden');
   await bidOn(sam, 1, 5, 'hidden');
 
-  assert.equal((await run('feature-show', alan, ['1'])).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
 });
 
 test('bids with the same time fall back to the name that comes first', async () => {
@@ -375,7 +475,7 @@ test('bids with the same time fall back to the name that comes first', async () 
     if (path.startsWith('bids/')) fake.data.set(path, { ...bid, createdAt: 7 });
   });
 
-  assert.equal((await run('feature-show', alan, ['1'])).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
 });
 
 test('firestore timestamps are understood as well as plain numbers', async () => {
@@ -391,14 +491,14 @@ test('firestore timestamps are understood as well as plain numbers', async () =>
   };
   service = build({ store: stamped });
 
-  assert.equal((await run('feature-show', alan, ['1'])).text.split('\n')[2], 'Top backer: Sam 100');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 100');
 });
 
 test('a hidden bid keeps its name and amount off the list but still counts', async () => {
   await addFeature('Dark mode');
   await bidOn(sam, 1, 200);
   const hidden = await bidOn(alan, 1, 555, 'hidden');
-  const shown = (await run('feature-show', sam, ['1'])).text;
+  const shown = (await run('feature-show', sam, { id: 1 })).text;
 
   assert.match(hidden.text, /^Bid placed: 555 FMC/);
   assert.equal(shown, '#1 Dark mode (open)\n755 FMC from 2 bidders\nTop backer: Sam 200');
@@ -412,7 +512,7 @@ test('a hidden bid bigger than every public one never becomes the top backer', a
   await bidOn(alan, 1, 900, 'hidden');
   await bidOn(sam, 1, 30);
 
-  assert.equal((await run('feature-show', sam, ['1'])).text.split('\n')[2], 'Top backer: Sam 30');
+  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top backer: Sam 30');
 });
 
 test('when every bid is hidden nobody is named at all', async () => {
@@ -421,7 +521,7 @@ test('when every bid is hidden nobody is named at all', async () => {
   await bidOn(sam, 1, 300, 'hidden');
 
   assert.equal(
-    (await run('feature-show', sam, ['1'])).text,
+    (await run('feature-show', sam, { id: 1 })).text,
     '#1 Dark mode (open)\n800 FMC from 2 bidders',
   );
 });
@@ -431,18 +531,18 @@ test('someone who bids openly and in secret is only credited for the open bids',
   await bidOn(alan, 1, 100);
   await bidOn(alan, 1, 700, 'hidden');
 
-  assert.equal((await run('feature-show', sam, ['1'])).text.split('\n')[2], 'Top backer: Alan 100');
+  assert.equal((await run('feature-show', sam, { id: 1 })).text.split('\n')[2], 'Top backer: Alan 100');
 });
 
 test('a feature with no bids and unknown features are handled', async () => {
   await addFeature('Dark mode');
   await addFeature('Gone');
-  await run('feature-remove', admin, ['2']);
+  await run('feature-remove', admin, { id: 2 });
 
-  assert.equal((await run('feature-show', alan, ['1'])).text, '#1 Dark mode (open)\nNo bids yet.');
-  assert.equal((await run('feature-show', alan, ['5'])).text, 'There is no feature #5.');
-  assert.equal((await run('feature-show', alan, ['2'])).text, 'There is no feature #2.');
-  assert.equal((await run('feature-show', alan, [])).text, 'Usage: feature-show <number>');
+  assert.equal((await run('feature-show', alan, { id: 1 })).text, '#1 Dark mode (open)\nNo bids yet.');
+  assert.equal((await run('feature-show', alan, { id: 5 })).text, 'There is no feature #5.');
+  assert.equal((await run('feature-show', alan, { id: 2 })).text, 'There is no feature #2.');
+  assert.equal((await run('feature-show', alan, { id: 0 })).text, 'There is no feature #0.');
 });
 
 test('your own bids are listed privately, with hidden and pending ones marked', async () => {
@@ -467,31 +567,31 @@ test('finishing a feature closes it, announces it, and keeps the bids', async ()
   await bidOn(alan, 1, 500);
   await bidOn(sam, 1, 300);
 
-  const reply = await run('feature-done', admin, ['1']);
+  const reply = await run('feature-done', admin, { id: 1 });
 
   assert.deepEqual(reply, { text: '#1 Dark mode is done! 2 bidders put 800 FMC behind it.', hidden: false });
   assert.equal((await store.getFeature(1)).status, 'done');
   assert.equal((await store.getFeature(1)).closedBy, '9');
   assert.equal((await store.confirmedBids()).length, 2);
   assert.equal((await run('feature-list', alan)).text, 'No features are open for bids yet.');
-  assert.match((await run('feature-list', alan, ['done'])).text, /#1 Dark mode: 800 FMC from 2 bidders/);
+  assert.match((await run('feature-list', alan, { status: 'done' })).text, /#1 Dark mode: 800 FMC from 2 bidders/);
 });
 
 test('a feature can only be finished once, and only if it exists', async () => {
   await addFeature('Dark mode');
-  await run('feature-done', admin, ['1']);
+  await run('feature-done', admin, { id: 1 });
 
-  assert.equal((await run('feature-done', admin, ['1'])).text, '#1 is already done.');
-  assert.equal((await run('feature-done', admin, ['4'])).text, 'There is no feature #4.');
-  assert.equal((await run('feature-done', admin, [])).text, 'Usage: feature-done <number>');
+  assert.equal((await run('feature-done', admin, { id: 1 })).text, '#1 is already done.');
+  assert.equal((await run('feature-done', admin, { id: 4 })).text, 'There is no feature #4.');
+  assert.equal((await run('feature-done', admin, { id: 0 })).text, 'There is no feature #0.');
 });
 
 test('a feature nobody bid on can be removed and then disappears', async () => {
   await addFeature('Dark mode');
 
-  assert.deepEqual(await run('feature-remove', admin, ['1']), { text: 'Removed #1: Dark mode.', hidden: true });
+  assert.deepEqual(await run('feature-remove', admin, { id: 1 }), { text: 'Removed #1: Dark mode.', hidden: true });
   assert.equal((await run('feature-list', alan)).text, 'No features are open for bids yet.');
-  assert.equal((await run('feature-remove', admin, ['1'])).text, 'There is no feature #1.');
+  assert.equal((await run('feature-remove', admin, { id: 1 })).text, 'There is no feature #1.');
 });
 
 test('a feature with bids cannot be removed until refunds exist', async () => {
@@ -501,8 +601,8 @@ test('a feature with bids cannot be removed until refunds exist', async () => {
   outcome = new Error('wallet down');
   await bidOn(alan, 2, 50);
 
-  const confirmed = await run('feature-remove', admin, ['1']);
-  const pending = await run('feature-remove', admin, ['2']);
+  const confirmed = await run('feature-remove', admin, { id: 1 });
+  const pending = await run('feature-remove', admin, { id: 2 });
 
   assert.equal(confirmed.text, "#1 has bids, and refunds aren't available yet, so it can't be removed.");
   assert.equal(pending.text, "#2 has bids, and refunds aren't available yet, so it can't be removed.");
@@ -514,7 +614,7 @@ test('failed bids do not stop a feature from being removed', async () => {
   outcome = { error: 'Balance insufficient' };
   await bidOn(alan, 1, 50);
 
-  assert.equal((await run('feature-remove', admin, ['1'])).text, 'Removed #1: Dark mode.');
+  assert.equal((await run('feature-remove', admin, { id: 1 })).text, 'Removed #1: Dark mode.');
 });
 
 test('every command in the definitions has a handler that answers', async () => {
@@ -524,4 +624,67 @@ test('every command in the definitions has a handler that answers', async () => 
     assert.equal(typeof reply.text, 'string');
     assert.equal(typeof reply.hidden, 'boolean');
   });
+});
+
+test('the board is told about every change that matters, once each', async () => {
+  const changes = [];
+  service = build({ onChange: id => changes.push(id) });
+
+  await addFeature('A');
+  await bidOn(alan, 1, 50);
+  await run('feature-done', admin, { id: 1 });
+  await addFeature('B');
+  await run('feature-remove', admin, { id: 2 });
+
+  assert.deepEqual(changes, [1, 1, 1, 2, 2]);
+});
+
+test('a bid the wallet refuses, a failed bid and a pending bid do not touch the board', async () => {
+  const changes = [];
+  service = build({ onChange: id => changes.push(id) });
+  await addFeature('A');
+  changes.length = 0;
+
+  outcome = { error: 'Balance insufficient' };
+  await bidOn(alan, 1, 50);
+  outcome = new Error('wallet down');
+  await bidOn(sam, 1, 50);
+  await run('feature-bid', alan, { id: 1 });
+  await run('feature-add', alan, { title: 'Sneaky' });
+  await run('feature-done', alan, { id: 1 });
+
+  assert.deepEqual(changes, []);
+});
+
+test('a bid that is confirmed on retry tells the board then', async () => {
+  const changes = [];
+  service = build({ onChange: id => changes.push(id) });
+  await addFeature('A');
+  outcome = new Error('wallet down');
+  await bidOn(alan, 1, 50);
+  changes.length = 0;
+
+  outcome = { id: 'tx' };
+  await service.resume();
+
+  assert.deepEqual(changes, [1]);
+});
+
+test('feature-sync is for admins and reports how many features it checked', async () => {
+  service = build({ resync: async () => 3 });
+
+  assert.deepEqual(await run('feature-sync', admin), { text: 'Checked 3 features on the board.', hidden: true });
+  assert.equal((await run('feature-sync', alan)).text, 'Only admins can do that.');
+});
+
+test('feature-sync says so when there is no board to sync', async () => {
+  service = build({ resync: async () => null });
+
+  assert.match((await run('feature-sync', admin)).text, /^The board isn't set up\./);
+});
+
+test('feature-sync with one feature is worded for one', async () => {
+  service = build({ resync: async () => 1 });
+
+  assert.equal((await run('feature-sync', admin)).text, 'Checked 1 feature on the board.');
 });

@@ -1,12 +1,13 @@
-const { toBoolean, toNumber } = require('./parse');
+const { fmt, plural } = require('./format');
+const { summarize } = require('./summary');
 
 const PROVIDER = 'discord.com';
 const MAX_TITLE = 80;
+const MAX_DESCRIPTION = 300;
+const CLEAR = '-';
 const LIST_LIMIT = 12;
 const RETRY_TEXT = "I couldn't confirm your bid with the wallet yet. It will be retried on its own, so check feature-mine in a few minutes before bidding again.";
 
-const fmt = amount => amount.toLocaleString('en-US');
-const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 const shown = text => ({ text, hidden: false });
 const hiddenReply = text => ({ text, hidden: true });
 
@@ -21,9 +22,10 @@ function totalsByFeature(bids) {
   return totals;
 }
 
-const totalOf = bids => bids.reduce((sum, bid) => sum + bid.amount, 0);
+const tidy = text => String(text || '').replace(/\s+/g, ' ').trim();
+const isId = id => Number.isSafeInteger(id) && id > 0;
 
-const millis = value => (value && typeof value.toMillis === 'function' ? value.toMillis() : Number(value) || 0);
+const totalOf = bids => bids.reduce((sum, bid) => sum + bid.amount, 0);
 
 module.exports = function createService({
   store,
@@ -31,6 +33,8 @@ module.exports = function createService({
   isAdmin,
   minBid = () => 10,
   linkURL,
+  onChange = () => {},
+  resync = async () => null,
   onError = console.error,
 }) {
   const inFlight = new Set();
@@ -52,6 +56,7 @@ module.exports = function createService({
       return { confirmed: false, error: String(result.error) };
     }
     await store.setBidStatus(bid.id, 'confirmed');
+    onChange(bid.featureId);
     return { confirmed: true };
   }
 
@@ -66,8 +71,8 @@ module.exports = function createService({
     }
   }
 
-  async function list(ctx, { words }) {
-    const status = (words[0] || 'open').toLowerCase();
+  async function list(ctx, { status: asked }) {
+    const status = String(asked || 'open').toLowerCase();
     if (!['open', 'done'].includes(status)) return shown('Use feature-list open or feature-list done.');
 
     const [found, confirmed] = await Promise.all([
@@ -95,34 +100,21 @@ module.exports = function createService({
     return shown(`${status === 'open' ? 'Open features' : 'Finished features'}:\n${lines.join('\n')}`);
   }
 
-  async function show(ctx, { words }) {
-    const id = toNumber(words[0]);
-    if (!id) return shown('Usage: feature-show <number>');
-    const feature = await store.getFeature(id);
+  async function show(ctx, { id }) {
+    const feature = isId(id) ? await store.getFeature(id) : null;
     if (!feature || feature.status === 'removed') return shown(`There is no feature #${id}.`);
 
-    const confirmed = (await store.bidsForFeature(id)).filter(bid => bid.status === 'confirmed');
+    const summary = summarize(await store.bidsForFeature(id));
     const head = `#${id} ${feature.title} (${feature.status})`;
-    if (!confirmed.length) return shown(`${head}\nNo bids yet.`);
+    const about = feature.description ? [feature.description] : [];
+    if (!summary.backers) return shown([head, ...about, 'No bids yet.'].join('\n'));
 
-    const named = new Map();
-    confirmed.filter(bid => !bid.hidden).forEach((bid) => {
-      const entry = named.get(bid.discordId) || { name: bid.name, amount: 0, reached: 0 };
-      entry.name = bid.name;
-      entry.amount += bid.amount;
-      entry.reached = Math.max(entry.reached, millis(bid.createdAt));
-      named.set(bid.discordId, entry);
-    });
-    const [top] = [...named.values()].sort((a, b) => b.amount - a.amount
-      || a.reached - b.reached
-      || a.name.localeCompare(b.name));
-
-    const everyone = new Set(confirmed.map(bid => bid.discordId));
     const lines = [
       head,
-      `${fmt(totalOf(confirmed))} FMC from ${plural(everyone.size, 'bidder')}`,
+      ...about,
+      `${fmt(summary.total)} FMC from ${plural(summary.backers, 'bidder')}`,
     ];
-    if (top) lines.push(`Top backer: ${top.name} ${fmt(top.amount)}`);
+    if (summary.top) lines.push(`Top backer: ${summary.top.name} ${fmt(summary.top.amount)}`);
     return shown(lines.join('\n'));
   }
 
@@ -144,13 +136,12 @@ module.exports = function createService({
     return hiddenReply(`Your bids:\n${lines.join('\n')}`);
   }
 
-  async function placeBid(ctx, { words }) {
-    const id = toNumber(words[0]);
-    const amount = toNumber(words[1]);
-    if (!id || !amount) return hiddenReply('Usage: feature-bid <number> <amount> [hidden]');
-    if (amount < minBid()) return hiddenReply(`The smallest bid is ${fmt(minBid())} FMC.`);
+  async function placeBid(ctx, { id, amount, hidden }) {
+    if (!Number.isSafeInteger(amount) || amount < minBid()) {
+      return hiddenReply(`The smallest bid is ${fmt(minBid())} FMC.`);
+    }
 
-    const feature = await store.getFeature(id);
+    const feature = isId(id) ? await store.getFeature(id) : null;
     if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
     if (feature.status !== 'open') return hiddenReply(`Bidding on #${id} is closed.`);
     if (inFlight.has(ctx.discordId)) return hiddenReply('Your last bid is still going through.');
@@ -162,7 +153,7 @@ module.exports = function createService({
         discordId: ctx.discordId,
         name: ctx.name,
         amount,
-        hidden: toBoolean(words[2]),
+        hidden: hidden === true,
         memo: `Feature bid #${id}: ${feature.title}`,
       });
 
@@ -182,41 +173,79 @@ module.exports = function createService({
     }
   }
 
-  async function add(ctx, { rest }) {
+  async function add(ctx, input) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
-    const title = rest.replace(/\s+/g, ' ').trim();
-    if (!title) return hiddenReply('Usage: feature-add <title>');
+    const title = tidy(input.title);
+    const description = tidy(input.description);
+    if (!title) return hiddenReply('A feature needs a title.');
     if (title.length > MAX_TITLE) return hiddenReply(`Keep the title under ${MAX_TITLE} characters.`);
-    const id = await store.createFeature({ title, createdBy: ctx.discordId });
+    if (description.length > MAX_DESCRIPTION) return hiddenReply(`Keep the description under ${MAX_DESCRIPTION} characters.`);
+    const id = await store.createFeature({ title, description, createdBy: ctx.discordId });
+    onChange(id);
     return shown(`Added #${id}: ${title}. Bid on it with feature-bid ${id} <amount>.`);
   }
 
-  async function done(ctx, { words }) {
+  async function edit(ctx, { id, ...input }) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
-    const id = toNumber(words[0]);
-    if (!id) return hiddenReply('Usage: feature-done <number>');
-    const feature = await store.getFeature(id);
+    const title = tidy(input.title);
+    const description = tidy(input.description);
+    if (!title && !description) {
+      return hiddenReply(`Give a new title, a new description, or both. Use ${CLEAR} as the description to remove it.`);
+    }
+    if (title.length > MAX_TITLE) return hiddenReply(`Keep the title under ${MAX_TITLE} characters.`);
+    if (description.length > MAX_DESCRIPTION) return hiddenReply(`Keep the description under ${MAX_DESCRIPTION} characters.`);
+
+    const feature = isId(id) ? await store.getFeature(id) : null;
+    if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
+
+    const changes = {};
+    const parts = [];
+    if (title) {
+      changes.title = title;
+      parts.push(`the title is now "${title}"`);
+    }
+    if (description) {
+      changes.description = description === CLEAR ? null : description;
+      parts.push(description === CLEAR ? 'the description was removed' : 'the description was updated');
+    }
+    await store.updateFeature(id, changes);
+    onChange(id);
+    return hiddenReply(`#${id}: ${parts.join(', and ')}.`);
+  }
+
+  async function done(ctx, { id }) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    const feature = isId(id) ? await store.getFeature(id) : null;
     if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
     if (feature.status !== 'open') return hiddenReply(`#${id} is already ${feature.status}.`);
 
     await store.setFeatureStatus(id, 'done', ctx.discordId);
+    onChange(id);
     const confirmed = (await store.bidsForFeature(id)).filter(item => item.status === 'confirmed');
     const backers = new Set(confirmed.map(item => item.discordId)).size;
     return shown(`#${id} ${feature.title} is done! ${plural(backers, 'bidder')} put ${fmt(totalOf(confirmed))} FMC behind it.`);
   }
 
-  async function remove(ctx, { words }) {
+  async function remove(ctx, { id }) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
-    const id = toNumber(words[0]);
-    if (!id) return hiddenReply('Usage: feature-remove <number>');
-    const feature = await store.getFeature(id);
+    const feature = isId(id) ? await store.getFeature(id) : null;
     if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
 
     const live = (await store.bidsForFeature(id)).filter(item => ['confirmed', 'pending'].includes(item.status));
     if (live.length) return hiddenReply(`#${id} has bids, and refunds aren't available yet, so it can't be removed.`);
 
     await store.setFeatureStatus(id, 'removed', ctx.discordId);
+    onChange(id);
     return hiddenReply(`Removed #${id}: ${feature.title}.`);
+  }
+
+  async function sync(ctx) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    const count = await resync();
+    if (count === null) {
+      return hiddenReply("The board isn't set up. Add board.channel and board.cid to the plugin's config.");
+    }
+    return hiddenReply(`Checked ${plural(count, 'feature')} on the board.`);
   }
 
   const handlers = {
@@ -225,14 +254,16 @@ module.exports = function createService({
     'feature-mine': mine,
     'feature-bid': placeBid,
     'feature-add': add,
+    'feature-edit': edit,
     'feature-done': done,
     'feature-remove': remove,
+    'feature-sync': sync,
   };
 
   return {
-    run: (command, ctx, input) => handlers[command](
+    run: (command, ctx, args = {}) => handlers[command](
       { ...ctx, admin: isAdmin(ctx.discordId) },
-      input,
+      args,
     ),
 
     async resume() {

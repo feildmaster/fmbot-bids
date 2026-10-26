@@ -1,8 +1,8 @@
 const utils = require('@basedakp48/plugin-utils');
 const admin = require('firebase-admin');
+const createBoard = require('./src/board');
 const { definitions } = require('./src/commands');
 const { DEFAULT_MIN_BID, parseConfig } = require('./src/config');
-const { parse } = require('./src/parse');
 const privateReply = require('./src/reply');
 const createService = require('./src/service');
 const createStore = require('./src/store');
@@ -22,6 +22,13 @@ const report = error => plugin.sendError(error).then(sent => sent || console.err
 let admins = new Set();
 let minimum = DEFAULT_MIN_BID;
 
+const store = createStore({ db: admin.firestore(), FieldValue: admin.firestore.FieldValue });
+const board = createBoard({
+  store,
+  request: options => plugin.response(options),
+  onError: report,
+});
+
 plugin.on('config', (config) => {
   const parsed = parseConfig(config);
   admins = parsed.admins;
@@ -30,28 +37,34 @@ plugin.on('config', (config) => {
     const entries = parsed.rejected.map(entry => JSON.stringify(entry)).join(', ');
     report(new Error(`Ignored admins that are not Discord IDs written as text: ${entries}`));
   }
+  if (parsed.boardProblem) report(new Error(`Ignored the board setting: ${parsed.boardProblem}`));
+  if (board.configure(parsed.board)) board.reconcile().catch(report);
 });
 
 const service = createService({
-  store: createStore({ db: admin.firestore(), FieldValue: admin.firestore.FieldValue }),
+  store,
   charge,
   isAdmin: discordId => typeof discordId === 'string' && admins.has(discordId),
   minBid: () => minimum,
   linkURL: process.env.WALLET_LINK_URL,
+  onChange: id => board.touch(id),
+  resync: () => board.reconcile(),
   onError: report,
 });
 
-plugin.presenceSystem().on('connect', () => service.resume().catch(report));
+plugin.presenceSystem().on('connect', () => {
+  service.resume().catch(report);
+  board.reconcile().catch(report);
+});
 setInterval(() => service.resume().catch(report), RESUME_EVERY).unref();
 plugin.defaultCommands(definitions);
 
-plugin.messageSystem().on('message-in', (msg) => {
-  if (msg.type !== 'text' || !msg.data || msg.data.connectorType !== 'discord') return;
-  const input = parse(msg);
-  if (!input) return;
+plugin.messageSystem().on('message/command', (msg) => {
+  if (!msg.data || msg.data.connectorType !== 'discord') return;
+  if (!Object.hasOwn(definitions, msg.data.command)) return;
 
   const context = { discordId: msg.uid, name: msg.data.nick || msg.uid };
-  service.run(input.command, context, input)
+  service.run(msg.data.command, context, msg.data.args)
     .then(({ text, hidden }) => {
       if (hidden) return plugin.messageSystem().sendMessage(privateReply(plugin, msg, text));
       return plugin.messageSystem().sendText(text, msg);

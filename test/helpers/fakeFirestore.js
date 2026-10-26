@@ -1,5 +1,7 @@
 const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 
+const REMOVE = Symbol('remove');
+
 module.exports = function createFakeFirestore() {
   const data = new Map();
   let counter = 0;
@@ -27,7 +29,12 @@ module.exports = function createFakeFirestore() {
     },
     update: async (fields) => {
       if (!data.has(path)) throw new Error(`No document: ${path}`);
-      data.set(path, { ...data.get(path), ...clone(fields) });
+      const next = { ...data.get(path) };
+      Object.entries(fields).forEach(([key, value]) => {
+        if (value === REMOVE) delete next[key];
+        else next[key] = clone(value);
+      });
+      data.set(path, next);
     },
   });
 
@@ -66,5 +73,5 @@ module.exports = function createFakeFirestore() {
     return clock;
   };
 
-  return { db, data, FieldValue: { serverTimestamp } };
+  return { db, data, FieldValue: { serverTimestamp, delete: () => REMOVE } };
 };

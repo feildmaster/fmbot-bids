@@ -10,7 +10,7 @@ test('the definitions pass the validation plugin-utils applies at startup', () =
 });
 
 test('the admin commands are hidden from people without server permissions', () => {
-  ['feature-add', 'feature-done', 'feature-remove'].forEach((name) => {
+  ['feature-add', 'feature-edit', 'feature-done', 'feature-remove', 'feature-sync'].forEach((name) => {
     assert.deepEqual(
       definitions[name].discord,
       { dmPermission: false, defaultMemberPermissions: '32' },
@@ -25,12 +25,16 @@ test('the admin commands are hidden from people without server permissions', () 
 test('only the commands that answer about you are private by default', () => {
   const privateOnes = Object.keys(definitions).filter(name => definitions[name].private === true);
 
-  assert.deepEqual(privateOnes.sort(), ['feature-bid', 'feature-mine', 'feature-remove']);
+  assert.deepEqual(
+    privateOnes.sort(),
+    ['feature-bid', 'feature-edit', 'feature-mine', 'feature-remove', 'feature-sync'],
+  );
 });
 
 test('every command takes its arguments in the order the text form reads them', () => {
   assert.deepEqual(definitions['feature-bid'].args.map(arg => arg.name), ['id', 'amount', 'hidden']);
-  assert.deepEqual(definitions['feature-add'].args.map(arg => arg.name), ['title']);
+  assert.deepEqual(definitions['feature-add'].args.map(arg => arg.name), ['title', 'description']);
+  assert.deepEqual(definitions['feature-edit'].args.map(arg => arg.name), ['id', 'title', 'description']);
   assert.deepEqual(definitions['feature-show'].args.map(arg => arg.name), ['id']);
 });
 
