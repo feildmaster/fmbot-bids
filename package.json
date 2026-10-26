@@ -1,0 +1,25 @@
+{
+  "name": "@basedakp48/plugin-bids",
+  "version": "0.0.1",
+  "description": "Lets Discord users put FMC behind the features they want built.",
+  "repository": "feildmaster/fmbot-bids",
+  "private": true,
+  "license": "MIT",
+  "author": "Alan H (feildmaster) <akp48@feildmaster.com> (https://feildmaster.com/)",
+  "engines": {
+    "node": ">=24 <26"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@basedakp48/plugin-utils": "github:BasedAKP48/Utils#semver:^2.1.0",
+    "firebase-admin": "^13.0.0"
+  },
+  "devDependencies": {
+    "@basedakp48/eslint-config": "*",
+    "eslint": "^4.14.0"
+  }
+}
