@@ -10,11 +10,18 @@ const adminOnly = { dmPermission: false, defaultMemberPermissions: '32' };
 const definitions = {
   'feature-list': {
     description: 'List the features people are bidding on',
-    args: [{
-      name: 'status',
-      description: 'open or done, open by default',
-      type: 'string',
-    }],
+    args: [
+      {
+        name: 'private',
+        description: 'Only show the list to you',
+        type: 'boolean',
+      },
+      {
+        name: 'status',
+        description: 'open or done, open by default',
+        type: 'string',
+      },
+    ],
   },
   'feature-show': {
     description: 'Show a feature and who is backing it',

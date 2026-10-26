@@ -97,16 +97,17 @@ module.exports = function createService({
     }
   }
 
-  async function list(ctx, { status: asked }) {
+  async function list(ctx, { status: asked, private: hide }) {
+    const reply = hide === true ? hiddenReply : shown;
     const status = String(asked || 'open').toLowerCase();
-    if (!['open', 'done'].includes(status)) return shown('Use feature-list open or feature-list done.');
+    if (!['open', 'done'].includes(status)) return reply('Use feature-list open or feature-list done.');
 
     const [found, confirmed] = await Promise.all([
       store.listFeatures(status),
       store.confirmedBids(),
     ]);
     if (!found.length) {
-      return shown(status === 'open' ? 'No features are open for bids yet.' : 'No bid has built a feature yet.');
+      return reply(status === 'open' ? 'No features are open for bids yet.' : 'No bid has built a feature yet.');
     }
 
     const totals = totalsByFeature(confirmed);
@@ -123,7 +124,7 @@ module.exports = function createService({
     const lines = rows
       .map(row => `#${row.id} ${row.title}: ${fmt(row.total)} FMC from ${plural(row.backers, 'bidder')}`);
     const heading = status === 'open' ? 'Open features' : 'Finished features';
-    return shown(`${heading}:\n${lines.join('\n')}`, {
+    return reply(`${heading}:\n${lines.join('\n')}`, {
       pages: paginate(lines, heading, status === 'open' ? OPEN_COLOR : DONE_COLOR),
     });
   }

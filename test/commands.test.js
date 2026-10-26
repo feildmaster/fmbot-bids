@@ -36,6 +36,7 @@ test('every command takes its arguments in the order the text form reads them', 
   assert.deepEqual(definitions['feature-add'].args.map(arg => arg.name), ['title', 'description']);
   assert.deepEqual(definitions['feature-edit'].args.map(arg => arg.name), ['id', 'title', 'description']);
   assert.deepEqual(definitions['feature-show'].args.map(arg => arg.name), ['id']);
+  assert.deepEqual(definitions['feature-list'].args.map(arg => arg.name), ['private', 'status']);
 });
 
 test('a private reply carries the interaction id and nothing else of the message', () => {

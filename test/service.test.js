@@ -254,6 +254,20 @@ test('the list is split into pages of ten, and every feature is on one', async (
   assert.equal(pages[2].description.split('\n')[2], '- #23 Feature 22: 0 FMC from 0 bidders');
 });
 
+test('a list can be asked for privately, and only then', async () => {
+  await addFeature('A');
+
+  const asked = await run('feature-list', alan, { private: true });
+  const declined = await run('feature-list', alan, { private: false });
+  const empty = await run('feature-list', alan, { private: true, status: 'done' });
+  const wrong = await run('feature-list', alan, { private: true, status: 'x' });
+
+  assert.equal(asked.hidden, true);
+  assert.equal(asked.pages.length, 1);
+  assert.equal(declined.hidden, false);
+  assert.deepEqual([empty.hidden, wrong.hidden], [true, true]);
+});
+
 test('finished features are listed in green', async () => {
   await addFeature('A');
   await run('feature-done', admin, { id: 1 });
