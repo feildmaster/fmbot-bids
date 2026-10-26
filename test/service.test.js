@@ -222,10 +222,13 @@ test('the list puts the most backed feature first and counts bidders', async () 
 
   const reply = await run('feature-list', alan);
 
-  assert.deepEqual(reply, {
-    text: 'Open features:\n#3 C: 300 FMC from 2 bidders\n#2 B: 100 FMC from 1 bidder\n#1 A: 0 FMC from 0 bidders',
-    hidden: false,
-  });
+  assert.equal(reply.text, 'Open features:\n#3 C: 300 FMC from 2 bidders\n#2 B: 100 FMC from 1 bidder\n#1 A: 0 FMC from 0 bidders');
+  assert.equal(reply.hidden, false);
+  assert.deepEqual(reply.pages, [{
+    title: 'Open features',
+    color: 0x5865f2,
+    description: '- #3 C: 300 FMC from 2 bidders\n- #2 B: 100 FMC from 1 bidder\n- #1 A: 0 FMC from 0 bidders',
+  }]);
 });
 
 test('only bids the wallet confirmed count towards a total', async () => {
@@ -239,14 +242,26 @@ test('only bids the wallet confirmed count towards a total', async () => {
   assert.equal((await run('feature-list', alan)).text, 'Open features:\n#1 A: 50 FMC from 1 bidder');
 });
 
-test('the list shows a dozen features and says how many more there are', async () => {
-  await Array.from({ length: 14 }, (_, i) => i)
+test('the list is split into pages of ten, and every feature is on one', async () => {
+  await Array.from({ length: 23 }, (_, i) => i)
     .reduce((chain, i) => chain.then(() => addFeature(`Feature ${i}`)), Promise.resolve());
 
-  const lines = (await run('feature-list', alan)).text.split('\n');
+  const { pages } = await run('feature-list', alan);
+  const items = pages.map(page => page.description.split('\n').length);
 
-  assert.equal(lines.length, 14);
-  assert.equal(lines[13], '...and 2 more');
+  assert.deepEqual(items, [10, 10, 3]);
+  assert.equal(pages.every(page => page.title === 'Open features'), true);
+  assert.equal(pages[2].description.split('\n')[2], '- #23 Feature 22: 0 FMC from 0 bidders');
+});
+
+test('finished features are listed in green', async () => {
+  await addFeature('A');
+  await run('feature-done', admin, { id: 1 });
+
+  const reply = await run('feature-list', alan, { status: 'done' });
+
+  assert.equal(reply.pages[0].title, 'Finished features');
+  assert.equal(reply.pages[0].color, 0x57f287);
 });
 
 test('the list only understands open and done', async () => {
@@ -600,29 +615,27 @@ test('your own bids are listed privately, with hidden and pending ones marked', 
 
   assert.equal(reply.text, 'Your bids:\n#1 Dark mode: 150 FMC (100 public, 50 hidden)\n#2 Export: 30 FMC (pending)');
   assert.equal(reply.hidden, true);
-  assert.deepEqual(reply.embed, {
+  assert.deepEqual(reply.pages, [{
     title: 'Your bids',
     color: 0x5865f2,
     description: '- #1 Dark mode: 150 FMC (100 public, 50 hidden)\n- #2 Export: 30 FMC (pending)',
-  });
+  }]);
   assert.deepEqual(await run('feature-mine', sam), { text: "You haven't bid on anything yet.", hidden: true });
 });
 
-test('a long list of bids stops before the embed limit and says how many were left out', async () => {
+test('a long list of bids is split into pages that fit in an embed', async () => {
   const features = Array.from({ length: 80 }, (_, n) => n + 1);
   await features.reduce((chain, n) => chain
     .then(() => addFeature(`Feature number ${n} with a fairly long title to take space up`)), Promise.resolve());
   await features.reduce((chain, n) => chain.then(() => bidOn(alan, n, 10)), Promise.resolve());
 
-  const { embed } = await run('feature-mine', alan);
-  const lines = embed.description.split('\n');
+  const { pages } = await run('feature-mine', alan);
 
-  assert.equal(embed.description.length < 4096, true);
-  assert.match(lines[lines.length - 1], /^\.\.\.and \d+ more$/);
-  const listed = lines.length - 1;
-  const left = Number(/\d+/.exec(lines[listed])[0]);
-  assert.equal(listed + left, 80);
-  assert.match(lines[0], /^- #1 /);
+  assert.equal(pages.length, 8);
+  assert.equal(pages.every(page => page.description.length < 4096), true);
+  assert.equal(pages.every(page => page.title === 'Your bids'), true);
+  assert.match(pages[0].description.split('\n')[0], /^- #1 /);
+  assert.match(pages[7].description.split('\n')[9], /^- #80 /);
 });
 
 test('someone with no bids gets a plain answer, not an empty embed', async () => {

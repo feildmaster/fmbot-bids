@@ -6,14 +6,14 @@ const PROVIDER = 'discord.com';
 const MAX_TITLE = 80;
 const MAX_DESCRIPTION = 300;
 const CLEAR = '-';
-const LIST_LIMIT = 12;
-const MAX_LIST = 3900;
-const LIST_COLOR = 0x5865f2;
+const PAGE_SIZE = 10;
+const OPEN_COLOR = 0x5865f2;
+const DONE_COLOR = 0x57f287;
 const STALE_BOARD = ' The board could not be updated, so it may be out of date.';
 const RETRY_TEXT = "I couldn't confirm your bid with the wallet yet. It will be retried on its own, so check feature-mine in a few minutes before bidding again.";
 
-const shown = (text, embed) => ({ text, hidden: false, ...(embed ? { embed } : {}) });
-const hiddenReply = (text, embed) => ({ text, hidden: true, ...(embed ? { embed } : {}) });
+const shown = (text, extra = {}) => ({ text, hidden: false, ...extra });
+const hiddenReply = (text, extra = {}) => ({ text, hidden: true, ...extra });
 
 function totalsByFeature(bids) {
   const totals = new Map();
@@ -29,18 +29,16 @@ function totalsByFeature(bids) {
 const tidy = text => String(text || '').replace(/\s+/g, ' ').trim();
 const isId = id => Number.isSafeInteger(id) && id > 0;
 
-function bidList(lines) {
-  const items = [];
-  let length = 0;
-  lines.every((line) => {
-    const item = `- ${line}`;
-    if (length + item.length + 1 > MAX_LIST) return false;
-    items.push(item);
-    length += item.length + 1;
-    return true;
-  });
-  if (items.length < lines.length) items.push(`...and ${lines.length - items.length} more`);
-  return { title: 'Your bids', color: LIST_COLOR, description: items.join('\n') };
+function paginate(lines, title, color) {
+  const count = Math.ceil(lines.length / PAGE_SIZE);
+  return Array.from({ length: count }, (_, page) => ({
+    title,
+    color,
+    description: lines
+      .slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+      .map(line => `- ${line}`)
+      .join('\n'),
+  }));
 }
 
 const totalOf = bids => bids.reduce((sum, bid) => sum + bid.amount, 0);
@@ -122,10 +120,12 @@ module.exports = function createService({
         };
       })
       .sort((a, b) => b.total - a.total || Number(a.id) - Number(b.id));
-    const lines = rows.slice(0, LIST_LIMIT)
+    const lines = rows
       .map(row => `#${row.id} ${row.title}: ${fmt(row.total)} FMC from ${plural(row.backers, 'bidder')}`);
-    if (rows.length > LIST_LIMIT) lines.push(`...and ${rows.length - LIST_LIMIT} more`);
-    return shown(`${status === 'open' ? 'Open features' : 'Finished features'}:\n${lines.join('\n')}`);
+    const heading = status === 'open' ? 'Open features' : 'Finished features';
+    return shown(`${heading}:\n${lines.join('\n')}`, {
+      pages: paginate(lines, heading, status === 'open' ? OPEN_COLOR : DONE_COLOR),
+    });
   }
 
   async function show(ctx, { id }) {
@@ -136,7 +136,7 @@ module.exports = function createService({
     const head = `#${id} ${feature.title} (${feature.status})`;
     const about = feature.description ? [feature.description] : [];
     const embed = render({ ...feature, id }, summary);
-    if (!summary.backers) return shown([head, ...about, 'No bids yet.'].join('\n'), embed);
+    if (!summary.backers) return shown([head, ...about, 'No bids yet.'].join('\n'), { embed });
 
     const lines = [
       head,
@@ -144,7 +144,7 @@ module.exports = function createService({
       `${fmt(summary.total)} FMC from ${plural(summary.backers, 'bidder')}`,
     ];
     if (summary.top) lines.push(`Top public backer: ${summary.top.name} ${fmt(summary.top.amount)}`);
-    return shown(lines.join('\n'), embed);
+    return shown(lines.join('\n'), { embed });
   }
 
   async function mine(ctx) {
@@ -164,7 +164,7 @@ module.exports = function createService({
       else if (secret) flags.push(`${fmt(totalOf(mineHere) - secret)} public`, `${fmt(secret)} hidden`);
       return `#${id} ${feature ? feature.title : 'removed feature'}: ${fmt(totalOf(mineHere))} FMC${flags.length ? ` (${flags.join(', ')})` : ''}`;
     });
-    return hiddenReply(`Your bids:\n${lines.join('\n')}`, bidList(lines));
+    return hiddenReply(`Your bids:\n${lines.join('\n')}`, { pages: paginate(lines, 'Your bids', OPEN_COLOR) });
   }
 
   async function placeBid(ctx, { id, amount, hidden }) {

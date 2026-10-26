@@ -52,14 +52,17 @@ test('a private reply carries the interaction id and nothing else of the message
   assert.deepEqual(reply.data, { interactionId: 'int1' });
 });
 
-test('a private reply can carry an embed, with or without an interaction', () => {
+test('a private reply can carry an embed or pages, with or without an interaction', () => {
   const embed = { title: 'Your bids' };
+  const pages = [embed, { title: 'More' }];
+  const withId = { cid: 'c', uid: '1', data: { interactionId: 'int1' } };
+  const direct = { cid: 'c', uid: '1', data: { isPM: true } };
 
-  const slash = privateReply({ cid: 'me' }, { cid: 'c', uid: '1', data: { interactionId: 'int1' } }, 'x', embed);
-  const typed = privateReply({ cid: 'me' }, { cid: 'c', uid: '1', data: { isPM: true } }, 'x', embed);
-
-  assert.deepEqual(slash.data, { interactionId: 'int1', discord_embed: embed });
-  assert.deepEqual(typed.data, { discord_embed: embed });
+  assert.deepEqual(privateReply({ cid: 'me' }, withId, 'x', { embed }).data, {
+    interactionId: 'int1', discord_embed: embed,
+  });
+  assert.deepEqual(privateReply({ cid: 'me' }, direct, 'x', { pages }).data, { discord_pages: pages });
+  assert.equal('data' in privateReply({ cid: 'me' }, direct, 'x', {}), false);
 });
 
 test('a private reply to typed text has no data, since the database refuses undefined', () => {

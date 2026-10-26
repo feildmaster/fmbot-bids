@@ -60,18 +60,23 @@ plugin.presenceSystem().on('connect', () => {
 setInterval(() => service.resume().catch(report), RESUME_EVERY).unref();
 plugin.defaultCommands(definitions);
 
+function answer(msg, {
+  text, hidden, embed, pages,
+}) {
+  const system = plugin.messageSystem();
+  if (hidden) return system.sendMessage(privateReply(plugin, msg, text, { embed, pages }));
+  const data = {};
+  if (embed) data.discord_embed = embed;
+  if (pages) data.discord_pages = pages;
+  return system.sendText(text, msg, Object.keys(data).length ? data : undefined);
+}
+
 plugin.messageSystem().on('message/command', (msg) => {
   if (!msg.data || msg.data.connectorType !== 'discord') return;
   if (!Object.hasOwn(definitions, msg.data.command)) return;
 
   const context = { discordId: msg.uid, name: msg.data.nick || msg.uid };
   service.run(msg.data.command, context, msg.data.args)
-    .then(({ text, hidden, embed }) => {
-      if (hidden) {
-        return plugin.messageSystem().sendMessage(privateReply(plugin, msg, text, embed));
-      }
-      const data = embed ? { discord_embed: embed } : undefined;
-      return plugin.messageSystem().sendText(text, msg, data);
-    })
+    .then(reply => answer(msg, reply))
     .catch(report);
 });
