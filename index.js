@@ -61,12 +61,13 @@ setInterval(() => service.resume().catch(report), RESUME_EVERY).unref();
 plugin.defaultCommands(definitions);
 
 function answer(msg, {
-  text, hidden, embed, pages,
+  text, hidden, embed, pages, withText,
 }) {
   const system = plugin.messageSystem();
   if (hidden) return system.sendMessage(privateReply(plugin, msg, text, { embed, pages }));
   const data = {};
   if (embed) data.discord_embed = embed;
+  if (withText) data.includeText = true;
   if (pages) data.discord_pages = pages;
   return system.sendText(text, msg, Object.keys(data).length ? data : undefined);
 }

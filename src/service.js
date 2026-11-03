@@ -257,9 +257,9 @@ module.exports = function createService({
 
     await store.setFeatureStatus(id, 'done', ctx.discordId);
     const note = await boardNote(id);
-    const confirmed = (await store.bidsForFeature(id)).filter(item => item.status === 'confirmed');
-    const backers = new Set(confirmed.map(item => item.discordId)).size;
-    return shown(`#${id} ${feature.title} is done! ${plural(backers, 'bidder')} put ${fmt(totalOf(confirmed))} FMC behind it.${note}`);
+    const summary = summarize(await store.bidsForFeature(id));
+    const embed = render({ ...feature, id, status: 'done' }, summary);
+    return shown(`#${id} ${feature.title} is done!${note}`, { embed, withText: true });
   }
 
   async function remove(ctx, { id }) {

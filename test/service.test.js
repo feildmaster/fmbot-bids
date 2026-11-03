@@ -678,12 +678,28 @@ test('finishing a feature closes it, announces it, and keeps the bids', async ()
 
   const reply = await run('feature-done', admin, { id: 1 });
 
-  assert.deepEqual(reply, { text: '#1 Dark mode is done! 2 bidders put 800 FMC behind it.', hidden: false });
+  assert.equal(reply.text, '#1 Dark mode is done!');
+  assert.equal(reply.hidden, false);
+  assert.equal(reply.withText, true);
+  assert.equal(reply.embed.color, 0x57f287);
+  assert.equal(reply.embed.footer.text, 'Built');
+  assert.equal(reply.embed.fields[0].value, '800 FMC from 2 bidders');
   assert.equal((await store.getFeature(1)).status, 'done');
   assert.equal((await store.getFeature(1)).closedBy, '9');
   assert.equal((await store.confirmedBids()).length, 2);
   assert.equal((await run('feature-list', alan)).text, 'No features are open for bids yet.');
   assert.match((await run('feature-list', alan, { status: 'done' })).text, /#1 Dark mode: 800 FMC from 2 bidders/);
+});
+
+test('the announcement shows the figures of the board, and no sentence about who put them in', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+  await bidOn(alan, 1, 200, true);
+
+  const reply = await run('feature-done', admin, { id: 1 });
+
+  assert.equal(reply.text, '#1 Dark mode is done!');
+  assert.deepEqual(reply.embed.fields.map(field => field.value), ['299 FMC from 1 bidder', 'Alan 99']);
 });
 
 test('a feature can only be finished once, and only if it exists', async () => {
@@ -778,7 +794,7 @@ test('an admin is told when the board could not be updated, and the change stays
 
   assert.equal(added.text, `Added #1: A. Bid on it with feature-bid 1 <amount>.${stale}`);
   assert.equal(edited.text, `#1: the title is now "B".${stale}`);
-  assert.match(finished.text, /put 0 FMC behind it. The board could not be updated/);
+  assert.equal(finished.text, `#1 B is done!${stale}`);
   assert.equal(removed.text, `Removed #2: C.${stale}`);
   assert.equal((await store.getFeature(1)).title, 'B');
 });
