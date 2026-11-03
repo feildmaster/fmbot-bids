@@ -8,14 +8,14 @@ const asList = (value) => {
   return [];
 };
 
-function parseBoard(value) {
-  if (value === undefined || value === null) return { board: null };
+function parseTarget(value, name) {
+  if (value === undefined || value === null) return { [name]: null };
   const channel = value && typeof value.channel === 'string' ? value.channel.trim() : '';
   const cid = value && typeof value.cid === 'string' ? value.cid.trim() : '';
-  if (SNOWFLAKE.test(channel) && cid) return { board: { channel, cid } };
+  if (SNOWFLAKE.test(channel) && cid) return { [name]: { channel, cid } };
   return {
-    board: null,
-    boardProblem: 'board needs a channel id and a connector cid, both written as text',
+    [name]: null,
+    [`${name}Problem`]: `${name} needs a channel id and a connector cid, both written as text`,
   };
 }
 
@@ -34,7 +34,11 @@ function parseConfig(config) {
   const minBid = Number.isSafeInteger(configured) && configured > 0 ? configured : DEFAULT_MIN_BID;
 
   return {
-    admins, rejected, minBid, ...parseBoard(source.board),
+    admins,
+    rejected,
+    minBid,
+    ...parseTarget(source.board, 'board'),
+    ...parseTarget(source.log, 'log'),
   };
 }
 

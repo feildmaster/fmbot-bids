@@ -17,6 +17,9 @@ let charges;
 let outcome;
 let errors;
 let minimum;
+let refunds;
+let refundOutcome;
+let logs;
 
 const build = (options = {}) => createService({
   store,
@@ -26,6 +29,13 @@ const build = (options = {}) => createService({
     if (result instanceof Error) throw result;
     return result;
   },
+  refund: async (request) => {
+    refunds.push(request);
+    const result = typeof refundOutcome === 'function' ? refundOutcome(request) : refundOutcome;
+    if (result instanceof Error) throw result;
+    return result;
+  },
+  log: async (text) => { logs.push(text); },
   isAdmin: id => id === '9',
   minBid: () => minimum,
   onError: error => errors.push(error.message),
@@ -47,6 +57,9 @@ beforeEach(() => {
   outcome = { id: 'tx1', balance: 100 };
   errors = [];
   minimum = 10;
+  refunds = [];
+  refundOutcome = { id: 'refund1', balance: 100 };
+  logs = [];
   service = build();
 });
 
@@ -719,19 +732,199 @@ test('a feature nobody bid on can be removed and then disappears', async () => {
   assert.equal((await run('feature-remove', admin, { id: 1 })).text, 'There is no feature #1.');
 });
 
-test('a feature with bids cannot be removed until refunds exist', async () => {
+test('removing a feature with bids closes it, says it is refunding, and refunds every confirmed bid', async () => {
   await addFeature('Dark mode');
-  await addFeature('Pending one');
-  await bidOn(alan, 1, 50);
+  await bidOn(alan, 1, 99);
+  await bidOn(sam, 1, 50, true);
+
+  const reply = await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.deepEqual(reply, { text: 'Removed #1 Dark mode and refunding its bids.', hidden: true });
+  assert.equal((await store.getFeature(1)).status, 'removed');
+  assert.equal(refunds.length, 2);
+  refunds.forEach((request) => {
+    assert.deepEqual(Object.keys(request).sort(), ['memo', 'requestId', 'uid']);
+    assert.match(request.requestId, /^bid-/);
+    assert.match(request.memo, /^Refund: Feature bid #1: Dark mode$/);
+  });
+  assert.deepEqual(refunds.map(request => request.uid).sort(), ['discord.com:::1', 'discord.com:::2']);
+  assert.deepEqual((await store.bidsForFeature(1)).map(bid => bid.status), ['refunded', 'refunded']);
+  assert.equal((await store.confirmedBids()).length, 0);
+});
+
+test('the refund results go to the log, with names and amounts', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+  await bidOn(sam, 1, 1500, true);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.deepEqual(logs.sort(), [
+    'Refunded 1,500 FMC to Sam (2) for #1.',
+    'Refunded 99 FMC to Alan (1) for #1.',
+  ]);
+});
+
+test('a refund the wallet refuses is logged once, kept, and tried again later', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+  refundOutcome = { error: 'Charge not found' };
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+  await service.resume();
+  await service.resume();
+
+  assert.deepEqual(logs, ['Could not refund 99 FMC to Alan (1) for #1: Charge not found. It will be tried again.']);
+  assert.deepEqual(errors, ['Charge not found']);
+  assert.equal(refunds.length, 3);
+  assert.equal((await store.bidsForFeature(1))[0].status, 'confirmed');
+
+  refundOutcome = { id: 'refund1', balance: 100 };
+  await service.resume();
+
+  assert.equal((await store.bidsForFeature(1))[0].status, 'refunded');
+  assert.equal(logs[logs.length - 1], 'Refunded 99 FMC to Alan (1) for #1.');
+});
+
+test('a wallet that cannot be reached is retried the same way', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+  refundOutcome = new Error('The wallet answered 500');
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal((await store.bidsForFeature(1))[0].status, 'confirmed');
+  assert.match(logs[0], /The wallet answered 500/);
+
+  refundOutcome = { id: 'refund1', balance: 100 };
+  await service.resume();
+
+  assert.equal((await store.bidsForFeature(1))[0].status, 'refunded');
+});
+
+test('a bid is never refunded twice, however often the sweep runs', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+  await service.resume();
+  await service.resume();
+
+  assert.equal(refunds.length, 1);
+  assert.equal(logs.length, 1);
+});
+
+test('only the bids of the removed feature are refunded', async () => {
+  await addFeature('Dark mode');
+  await addFeature('Export');
+  await bidOn(alan, 1, 99);
+  await bidOn(alan, 2, 40);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal(refunds.length, 1);
+  assert.equal((await store.bidsForFeature(2))[0].status, 'confirmed');
+});
+
+test('a bid that was still pending is settled, and then refunded', async () => {
+  await addFeature('Dark mode');
   outcome = new Error('wallet down');
-  await bidOn(alan, 2, 50);
+  await bidOn(alan, 1, 50);
 
-  const confirmed = await run('feature-remove', admin, { id: 1 });
-  const pending = await run('feature-remove', admin, { id: 2 });
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+  assert.equal(refunds.length, 0);
 
-  assert.equal(confirmed.text, "#1 has bids, and refunds aren't available yet, so it can't be removed.");
-  assert.equal(pending.text, "#2 has bids, and refunds aren't available yet, so it can't be removed.");
-  assert.equal((await store.getFeature(1)).status, 'open');
+  outcome = { id: 'tx', balance: 1 };
+  await service.resume();
+
+  assert.equal(refunds.length, 1);
+  assert.equal((await store.bidsForFeature(1))[0].status, 'refunded');
+});
+
+test('a bid that confirms after its feature was removed is refunded by the sweep', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 50);
+  await store.setFeatureStatus(1, 'removed', '9');
+
+  await service.resume();
+
+  assert.equal(refunds.length, 1);
+  assert.equal((await store.bidsForFeature(1))[0].status, 'refunded');
+});
+
+test('a built feature with bids cannot be removed, and nothing is refunded', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 50);
+  await run('feature-done', admin, { id: 1 });
+
+  const reply = await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal(reply.text, "#1 is done, so its bids can't be refunded.");
+  assert.equal((await store.getFeature(1)).status, 'done');
+  assert.equal(refunds.length, 0);
+});
+
+test('a refunded bid is no longer part of the totals', async () => {
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+  await bidOn(sam, 1, 50);
+  await store.setBidStatus((await store.bidsByUser('1'))[0].id, 'refunded');
+
+  assert.equal((await run('feature-show', alan, { id: 1 })).embed.fields[0].value, '50 FMC from 1 bidder');
+});
+
+test('your list shows a refunded feature as refunded, and keeps the others as they are', async () => {
+  await addFeature('Dark mode');
+  await addFeature('Export');
+  await bidOn(alan, 1, 99);
+  await bidOn(alan, 1, 100, true);
+  await bidOn(alan, 2, 40);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal(
+    (await run('feature-mine', alan)).text,
+    'Your bids:\n#1 Dark mode: 199 FMC refunded\n#2 Export: 40 FMC',
+  );
+});
+
+test('refunding does nothing harmful when the wallet is not set up for it', async () => {
+  service = createService({
+    store,
+    charge: async () => ({ id: 'tx' }),
+    isAdmin: id => id === '9',
+    minBid: () => minimum,
+    onError: error => errors.push(error.message),
+  });
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal((await store.bidsForFeature(1))[0].status, 'confirmed');
+  assert.deepEqual(errors, ['Refunds are not set up']);
+});
+
+test('a log that fails does not stop a refund from being recorded', async () => {
+  service = build({ log: async () => { throw new Error('no channel'); } });
+  await addFeature('Dark mode');
+  await bidOn(alan, 1, 99);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.equal((await store.bidsForFeature(1))[0].status, 'refunded');
+  assert.deepEqual(errors, ['no channel']);
 });
 
 test('failed bids do not stop a feature from being removed', async () => {

@@ -86,3 +86,42 @@ test('it gives up when the wallet never answers', async () => {
 test('it refuses to start without a key', () => {
   assert.throws(() => createCharge({}), /key is required/);
 });
+
+const refundRequest = { uid: 'discord.com:::1', requestId: 'bid-abc12345', memo: 'Refund: bid' };
+
+test('a refund is posted, signed with the key, to the refund endpoint', async () => {
+  const { fetch, calls } = fakeFetch({ id: 'refund:bid-abc12345', balance: 150 });
+  const refund = createCharge.createRefund({ key: 'secret', baseUrl: 'https://wallet.test', fetch });
+
+  assert.deepEqual(await refund(refundRequest), { id: 'refund:bid-abc12345', balance: 150 });
+
+  const [{ url, options }] = calls;
+  assert.equal(url, 'https://wallet.test/wallet-refund');
+  assert.deepEqual(JSON.parse(options.body), refundRequest);
+  assert.equal(
+    options.headers.http_x_signature,
+    crypto.createHmac('sha256', 'secret').update(options.body).digest('hex'),
+  );
+});
+
+test('a refund sends only the properties the wallet accepts', async () => {
+  const { fetch, calls } = fakeFetch({});
+  await createCharge.createRefund({ key: 'k', fetch })({ ...refundRequest, amount: 5, currency: 'GEM' });
+
+  assert.deepEqual(Object.keys(JSON.parse(calls[0].options.body)).sort(), ['memo', 'requestId', 'uid']);
+});
+
+test('a refund the wallet refuses is data, and a server error is thrown to be retried', async () => {
+  const refusal = fakeFetch({ error: 'Charge not found' });
+  const broken = fakeFetch({ error: 'Failed' }, 500);
+
+  assert.deepEqual(
+    await createCharge.createRefund({ key: 'k', fetch: refusal.fetch })(refundRequest),
+    { error: 'Charge not found' },
+  );
+  await assert.rejects(createCharge.createRefund({ key: 'k', fetch: broken.fetch })(refundRequest), /answered 500/);
+});
+
+test('a refund client refuses to start without a key', () => {
+  assert.throws(() => createCharge.createRefund({}), /key is required/);
+});

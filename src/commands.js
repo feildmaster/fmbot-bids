@@ -90,7 +90,7 @@ const definitions = {
     discord: adminOnly,
   },
   'feature-remove': {
-    description: 'Remove a feature nobody has bid on',
+    description: 'Remove a feature and refund its bids',
     private: true,
     args: [id],
     discord: adminOnly,

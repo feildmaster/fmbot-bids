@@ -104,3 +104,34 @@ test('a board setting that cannot work is reported and ignored', () => {
     assert.match(parsed.boardProblem, /channel id and a connector cid/, JSON.stringify(config));
   });
 });
+
+test('the log channel is read the same way as the board, and does not touch it', () => {
+  const parsed = parseConfig({
+    board: { channel: '429383061965373443', cid: 'fmbot-cid' },
+    log: { channel: ' 429383061965373444 ', cid: ' fmbot-cid ' },
+  });
+
+  assert.deepEqual(parsed.log, { channel: '429383061965373444', cid: 'fmbot-cid' });
+  assert.deepEqual(parsed.board, { channel: '429383061965373443', cid: 'fmbot-cid' });
+  assert.equal(parsed.logProblem, undefined);
+});
+
+test('no log setting means no log and nothing to report', () => {
+  [{}, { log: null }, undefined].forEach((config) => {
+    const parsed = parseConfig(config);
+    assert.equal(parsed.log, null);
+    assert.equal(parsed.logProblem, undefined);
+  });
+});
+
+test('a log setting that cannot work is reported and ignored, and the board is unaffected', () => {
+  const parsed = parseConfig({
+    board: { channel: '429383061965373443', cid: 'fmbot-cid' },
+    log: { channel: 'general', cid: 'fmbot-cid' },
+  });
+
+  assert.equal(parsed.log, null);
+  assert.match(parsed.logProblem, /^log needs a channel id and a connector cid/);
+  assert.equal(parsed.boardProblem, undefined);
+  assert.notEqual(parsed.board, null);
+});

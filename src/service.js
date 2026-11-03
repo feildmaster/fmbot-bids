@@ -46,6 +46,8 @@ const totalOf = bids => bids.reduce((sum, bid) => sum + bid.amount, 0);
 module.exports = function createService({
   store,
   charge,
+  refund = async () => ({ error: 'Refunds are not set up' }),
+  log = async () => {},
   isAdmin,
   minBid = () => 10,
   linkURL,
@@ -55,6 +57,8 @@ module.exports = function createService({
   onError = console.error,
 }) {
   const inFlight = new Set();
+  const refundFailures = new Set();
+  let running = Promise.resolve();
 
   const boardNote = async (id) => {
     try {
@@ -85,6 +89,46 @@ module.exports = function createService({
     onChange(bid.featureId);
     return { confirmed: true };
   }
+
+  const logRefund = text => Promise.resolve(log(text)).catch(onError);
+
+  async function refundBid(bid) {
+    try {
+      const result = await refund({
+        uid: `${PROVIDER}:::${bid.discordId}`,
+        requestId: bid.requestId,
+        memo: `Refund: ${bid.memo}`,
+      });
+      if (result && result.error) throw new Error(String(result.error));
+      await store.setBidStatus(bid.id, 'refunded');
+      refundFailures.delete(bid.id);
+      await logRefund(`Refunded ${fmt(bid.amount)} FMC to ${bid.name} (${bid.discordId}) for #${bid.featureId}.`);
+    } catch (error) {
+      if (!refundFailures.has(bid.id)) {
+        refundFailures.add(bid.id);
+        onError(error);
+        await logRefund(`Could not refund ${fmt(bid.amount)} FMC to ${bid.name} (${bid.discordId}) for #${bid.featureId}: ${error.message}. It will be tried again.`);
+      }
+    }
+  }
+
+  async function sweepRefunds(only) {
+    const confirmed = (await store.confirmedBids())
+      .filter(bid => only === undefined || bid.featureId === only);
+    const featureIds = [...new Set(confirmed.map(bid => bid.featureId))];
+    const load = async id => [id, await store.getFeature(id)];
+    const features = new Map(await Promise.all(featureIds.map(load)));
+    const owed = confirmed.filter((bid) => {
+      const feature = features.get(bid.featureId);
+      return feature && feature.status === 'removed';
+    });
+    await owed.reduce((chain, bid) => chain.then(() => refundBid(bid)), Promise.resolve());
+  }
+
+  const queueSweep = (only) => {
+    running = running.then(() => sweepRefunds(only)).catch(onError);
+    return running;
+  };
 
   function refusal(error) {
     switch (error) {
@@ -156,8 +200,12 @@ module.exports = function createService({
     const entry = async id => [id, await store.getFeature(id)];
     const features = new Map(await Promise.all(ids.map(entry)));
     const lines = ids.map((id) => {
-      const mineHere = bids.filter(bid => bid.featureId === id);
+      const here = bids.filter(bid => bid.featureId === id);
+      const mineHere = here.filter(bid => bid.status !== 'refunded');
       const feature = features.get(id);
+      if (!mineHere.length) {
+        return `#${id} ${feature ? feature.title : 'removed feature'}: ${fmt(totalOf(here))} FMC refunded`;
+      }
       const flags = [];
       if (mineHere.some(bid => bid.status === 'pending')) flags.push('pending');
       const secret = totalOf(mineHere.filter(bid => bid.hidden));
@@ -268,10 +316,14 @@ module.exports = function createService({
     if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
 
     const live = (await store.bidsForFeature(id)).filter(item => ['confirmed', 'pending'].includes(item.status));
-    if (live.length) return hiddenReply(`#${id} has bids, and refunds aren't available yet, so it can't be removed.`);
+    if (live.length && feature.status !== 'open') {
+      return hiddenReply(`#${id} is ${feature.status}, so its bids can't be refunded.`);
+    }
 
     await store.setFeatureStatus(id, 'removed', ctx.discordId);
+    queueSweep(id);
     const note = await boardNote(id);
+    if (live.length) return hiddenReply(`Removed #${id} ${feature.title} and refunding its bids.${note}`);
     return hiddenReply(`Removed #${id}: ${feature.title}.${note}`);
   }
 
@@ -307,7 +359,10 @@ module.exports = function createService({
       await pending.reduce((chain, item) => chain
         .then(() => settle(item))
         .catch(onError), Promise.resolve());
+      await queueSweep();
       return pending.length;
     },
+
+    idle: () => running,
   };
 };
