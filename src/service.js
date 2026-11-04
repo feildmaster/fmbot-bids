@@ -28,6 +28,7 @@ function totalsByFeature(bids) {
 
 const tidy = text => String(text || '').replace(/\s+/g, ' ').trim();
 const isId = id => Number.isSafeInteger(id) && id > 0;
+const requestIdOf = bid => `bid-${bid.id}`;
 
 function paginate(lines, title, color) {
   const count = Math.ceil(lines.length / PAGE_SIZE);
@@ -77,13 +78,16 @@ module.exports = function createService({
     const result = await charge({
       uid: `${PROVIDER}:::${bid.discordId}`,
       amount: bid.amount,
-      requestId: bid.requestId,
+      requestId: requestIdOf(bid),
       memo: bid.memo,
       extra: { bidFeature: String(bid.featureId), bidId: bid.id },
     });
-    if (result && result.error) {
-      await store.setBidStatus(bid.id, 'failed', { reason: String(result.error) });
-      return { confirmed: false, error: String(result.error) };
+    const problem = result && result.error
+      ? String(result.error)
+      : result && result.status !== 'completed' && `The charge is ${result.status}`;
+    if (problem) {
+      await store.setBidStatus(bid.id, 'failed', { reason: problem });
+      return { confirmed: false, error: problem };
     }
     await store.setBidStatus(bid.id, 'confirmed');
     onChange(bid.featureId);
@@ -96,7 +100,7 @@ module.exports = function createService({
     try {
       const result = await refund({
         uid: `${PROVIDER}:::${bid.discordId}`,
-        requestId: bid.requestId,
+        requestId: requestIdOf(bid),
         memo: `Refund: ${bid.memo}`,
       });
       if (result && result.error) throw new Error(String(result.error));

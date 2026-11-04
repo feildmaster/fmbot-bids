@@ -61,12 +61,11 @@ test('features are listed by status, and closing one records who did it', async 
   assert.equal((await store.getFeature(2)).closedBy, '8');
 });
 
-test('a new bid is pending and gets a request id from its own id', async () => {
+test('a new bid is pending and does not store a request id, which comes from its own id', async () => {
   const bid = await store.createBid(bidInput());
 
   assert.equal(bid.status, 'pending');
-  assert.equal(bid.requestId, `bid-${bid.id}`);
-  assert.match(bid.requestId, /^[\w-]{8,100}$/);
+  assert.equal('requestId' in bid, false);
 
   const { id, ...stored } = bid;
   assert.deepEqual(fake.data.get(`bids/${id}`), stored);

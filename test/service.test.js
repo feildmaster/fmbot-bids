@@ -54,7 +54,7 @@ beforeEach(() => {
   fake = createFakeFirestore();
   store = createStore({ db: fake.db, FieldValue: fake.FieldValue });
   charges = [];
-  outcome = { id: 'tx1', balance: 100 };
+  outcome = { id: 'tx1', balance: 100, status: 'completed' };
   errors = [];
   minimum = 10;
   refunds = [];
@@ -392,6 +392,18 @@ test('a wallet refusal is explained, nothing is counted, and the bid is marked f
   assert.deepEqual(errors, []);
 });
 
+test('a charge that is no longer completed does not confirm the bid', async () => {
+  await addFeature('Dark mode');
+  outcome = { id: 'tx1', balance: 100, status: 'refunded' };
+
+  await bidOn(alan, 1, 50);
+
+  const [failed] = await store.bidsByUser('1');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.reason, 'The charge is refunded');
+  assert.equal((await store.confirmedBids()).length, 0);
+});
+
 test('someone without a linked wallet is told how to link one', async () => {
   await addFeature('Dark mode');
   outcome = { error: 'User not found' };
@@ -427,7 +439,7 @@ test('when the wallet cannot be reached the bid stays pending and is retried lat
   assert.equal((await store.pendingBids()).length, 1);
   assert.equal((await store.confirmedBids()).length, 0);
 
-  outcome = { id: 'tx2', balance: 10 };
+  outcome = { id: 'tx2', balance: 10, status: 'completed' };
   assert.equal(await service.resume(), 1);
 
   assert.equal((await store.pendingBids()).length, 0);
@@ -470,7 +482,7 @@ test('one person cannot start a second bid while the first is going through', as
   await addFeature('Dark mode');
   let release;
   outcome = () => new Promise((resolve) => {
-    release = () => resolve({ id: 'tx1' });
+    release = () => resolve({ id: 'tx1', status: 'completed' });
   });
 
   const first = bidOn(alan, 1, 50);
@@ -478,7 +490,7 @@ test('one person cannot start a second bid while the first is going through', as
   const second = await bidOn(alan, 1, 60);
   release();
   await first;
-  outcome = { id: 'tx2' };
+  outcome = { id: 'tx2', status: 'completed' };
   const third = await bidOn(alan, 1, 70);
 
   assert.equal(second.text, 'Your last bid is still going through.');
@@ -491,7 +503,7 @@ test('the lock is released when a bid fails', async () => {
   outcome = new Error('wallet down');
   await bidOn(alan, 1, 50);
 
-  outcome = { id: 'tx' };
+  outcome = { id: 'tx', status: 'completed' };
 
   assert.match((await bidOn(alan, 1, 60)).text, /^Bid placed/);
 });
@@ -841,7 +853,7 @@ test('a bid that was still pending is settled, and then refunded', async () => {
   await service.idle();
   assert.equal(refunds.length, 0);
 
-  outcome = { id: 'tx', balance: 1 };
+  outcome = { id: 'tx', balance: 1, status: 'completed' };
   await service.resume();
 
   assert.equal(refunds.length, 1);
@@ -900,7 +912,7 @@ test('your list shows a refunded feature as refunded, and keeps the others as th
 test('refunding does nothing harmful when the wallet is not set up for it', async () => {
   service = createService({
     store,
-    charge: async () => ({ id: 'tx' }),
+    charge: async () => ({ id: 'tx', status: 'completed' }),
     isAdmin: id => id === '9',
     minBid: () => minimum,
     onError: error => errors.push(error.message),
@@ -1008,6 +1020,19 @@ test('no board, or a board that is up to date, adds nothing to the answer', asyn
   assert.equal((await addFeature('A')).text, 'Added #1: A. Bid on it with feature-bid 1 <amount>.');
 });
 
+test('the wallet request id comes from the bid id, also for bids that stored one', async () => {
+  await addFeature('Dark mode');
+  await store.createBid({
+    featureId: 1, discordId: '1', name: 'Alan', amount: 50, hidden: false, memo: 'Feature bid #1: Dark mode',
+  });
+  const [stored] = await store.pendingBids();
+  fake.data.set(`bids/${stored.id}`, { ...fake.data.get(`bids/${stored.id}`), requestId: 'bid-old-value' });
+
+  await service.resume();
+
+  assert.equal(charges[0].requestId, `bid-${stored.id}`);
+});
+
 test('a bid the wallet refuses, a failed bid and a pending bid do not touch the board', async () => {
   const changes = [];
   service = build({ onChange: id => changes.push(id) });
@@ -1033,7 +1058,7 @@ test('a bid that is confirmed on retry tells the board then', async () => {
   await bidOn(alan, 1, 50);
   changes.length = 0;
 
-  outcome = { id: 'tx' };
+  outcome = { id: 'tx', status: 'completed' };
   await service.resume();
 
   assert.deepEqual(changes, [1]);

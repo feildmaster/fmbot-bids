@@ -66,7 +66,6 @@ module.exports = function createStore({ db, FieldValue }) {
         amount,
         hidden: hidden === true,
         memo,
-        requestId: `bid-${ref.id}`,
         status: 'pending',
         createdAt: FieldValue.serverTimestamp(),
       };
