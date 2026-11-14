@@ -27,6 +27,12 @@ function totalsByFeature(bids) {
 }
 
 const tidy = text => String(text || '').replace(/\s+/g, ' ').trim();
+const tidyLines = text => String(text || '')
+  .split('\n')
+  .map(tidy)
+  .join('\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
 const isId = id => Number.isSafeInteger(id) && id > 0;
 const requestIdOf = bid => `bid-${bid.id}`;
 
@@ -264,7 +270,7 @@ module.exports = function createService({
   async function add(ctx, input) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
     const title = tidy(input.title);
-    const description = tidy(input.description);
+    const description = tidyLines(input.description);
     if (!title) return hiddenReply('A feature needs a title.');
     if (title.length > MAX_TITLE) return hiddenReply(`Keep the title under ${MAX_TITLE} characters.`);
     if (description.length > MAX_DESCRIPTION) return hiddenReply(`Keep the description under ${MAX_DESCRIPTION} characters.`);
@@ -276,7 +282,7 @@ module.exports = function createService({
   async function edit(ctx, { id, ...input }) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
     const title = tidy(input.title);
-    const description = tidy(input.description);
+    const description = tidyLines(input.description);
     if (!title && !description) {
       return hiddenReply(`Give a new title, a new description, or both. Use ${CLEAR} as the description to remove it.`);
     }

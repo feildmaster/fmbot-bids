@@ -111,6 +111,15 @@ test('a description is optional and is tidied like the title', async () => {
   assert.match(empty.text, /^Added #3: Import\./);
 });
 
+test('a description keeps its line breaks, with spacing tidied and blank lines capped', async () => {
+  await run('feature-add', admin, {
+    title: 'Signing',
+    description: '  Costs   a lot.  \r\n---\n\n\n\nNot   planned.  ',
+  });
+
+  assert.equal((await store.getFeature(1)).description, 'Costs a lot.\n---\n\nNot planned.');
+});
+
 test('a description cannot be very long', async () => {
   const long = await run('feature-add', admin, { title: 'A', description: 'x'.repeat(301) });
   const limit = await run('feature-add', admin, { title: 'B', description: 'x'.repeat(300) });
