@@ -11,7 +11,8 @@ test('the definitions pass the validation plugin-utils applies at startup', () =
 
 test('the admin commands are hidden from people without server permissions', () => {
   [
-    'feature-add', 'feature-edit', 'feature-goal', 'feature-done', 'feature-reset', 'feature-remove', 'feature-sync',
+    'feature-add', 'feature-edit', 'feature-goal', 'feature-due', 'feature-repeat',
+    'feature-done', 'feature-reset', 'feature-remove', 'feature-sync',
   ].forEach((name) => {
     assert.deepEqual(
       definitions[name].discord,
@@ -33,7 +34,7 @@ test('everyone commands share one group and admin commands another, with short s
   assert.deepEqual(names('feature'), ['bid', 'list', 'mine', 'show']);
   assert.deepEqual(
     names('feature-admin'),
-    ['add', 'done', 'edit', 'goal', 'remove', 'reset', 'sync'],
+    ['add', 'done', 'due', 'edit', 'goal', 'remove', 'repeat', 'reset', 'sync'],
   );
   assert.equal(Object.values(definitions).every(item => item.group !== undefined), true);
 });
@@ -55,7 +56,10 @@ test('only the commands that answer about you are private by default', () => {
 
   assert.deepEqual(
     privateOnes.sort(),
-    ['feature-bid', 'feature-edit', 'feature-goal', 'feature-mine', 'feature-remove', 'feature-sync'],
+    [
+      'feature-bid', 'feature-due', 'feature-edit', 'feature-goal', 'feature-mine',
+      'feature-remove', 'feature-repeat', 'feature-sync',
+    ],
   );
 });
 
@@ -64,6 +68,8 @@ test('every command takes its arguments in the order the text form reads them', 
   assert.deepEqual(definitions['feature-add'].args.map(arg => arg.name), ['title', 'description']);
   assert.deepEqual(definitions['feature-edit'].args.map(arg => arg.name), ['id', 'title', 'description']);
   assert.deepEqual(definitions['feature-goal'].args.map(arg => arg.name), ['id', 'amount']);
+  assert.deepEqual(definitions['feature-due'].args.map(arg => arg.name), ['id', 'date']);
+  assert.deepEqual(definitions['feature-repeat'].args.map(arg => arg.name), ['id', 'count', 'unit']);
   assert.deepEqual(definitions['feature-reset'].args.map(arg => arg.name), ['id', 'amount']);
   assert.deepEqual(definitions['feature-show'].args.map(arg => arg.name), ['id']);
   assert.deepEqual(definitions['feature-list'].args.map(arg => arg.name), ['private', 'status']);

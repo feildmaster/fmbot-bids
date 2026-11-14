@@ -34,7 +34,9 @@ module.exports = function createStore({ db, FieldValue }) {
 
     listFeatures: status => query(features(), 'status', status),
 
-    updateFeature(id, { title, description, goal }) {
+    updateFeature(id, {
+      title, description, goal, due, every,
+    }) {
       const fields = {};
       if (title !== undefined) fields.title = title;
       if (description !== undefined) {
@@ -43,16 +45,25 @@ module.exports = function createStore({ db, FieldValue }) {
       if (goal !== undefined) {
         fields.goal = goal === null ? FieldValue.delete() : goal;
       }
+      if (due !== undefined) {
+        fields.due = due === null ? FieldValue.delete() : due;
+      }
+      if (every !== undefined) {
+        fields.every = every === null ? FieldValue.delete() : every;
+      }
       return features().doc(String(id)).update(fields);
     },
 
-    cashOut(id, bidIds, entry) {
+    cashOut(id, bidIds, entry, due) {
       const ref = features().doc(String(id));
       return db.runTransaction(async (t) => {
         const snapshot = await t.get(ref);
         const history = snapshot.get('history') || [];
         bidIds.forEach(bidId => t.update(bids().doc(bidId), { status: 'collected' }));
-        t.update(ref, { history: [...history, { ...entry, closedAt: Date.now() }] });
+        t.update(ref, {
+          history: [...history, { ...entry, closedAt: Date.now() }],
+          ...(due ? { due } : {}),
+        });
       });
     },
 

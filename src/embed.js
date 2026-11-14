@@ -16,6 +16,17 @@ function progress(goal, total) {
   return `${bar} ${fmt(total)} / ${fmt(goal)} FMC`;
 }
 
+function everyText({ count, unit }) {
+  return count === 1 ? `every ${unit.slice(0, -1)}` : `every ${count} ${unit}`;
+}
+
+function dueText({ due, every }) {
+  const [year, month, day] = due.split('-').map(Number);
+  const seconds = Date.UTC(year, month - 1, day) / 1000;
+  const when = `<t:${seconds}:D> (<t:${seconds}:R>)`;
+  return every ? `${when}\nRepeats ${everyText(every)}` : when;
+}
+
 function render(feature, summary) {
   const fields = [];
   if (feature.status !== 'removed') {
@@ -29,6 +40,9 @@ function render(feature, summary) {
     }
     if (feature.goal) {
       fields.push({ name: 'Goal', value: progress(feature.goal, summary.total) });
+    }
+    if (feature.due && feature.status === 'open') {
+      fields.push({ name: 'Due', value: dueText(feature), inline: true });
     }
     const history = feature.history || [];
     if (history.length) {

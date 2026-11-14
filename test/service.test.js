@@ -49,6 +49,10 @@ const bidOn = (ctx, id, amount, hidden) => run('feature-bid', ctx, {
 });
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const user = n => ({ discordId: `10${n}`, name: `User${n}` });
+const bidAll = async (id, ...amounts) => amounts.reduce(
+  (chain, amount, index) => chain.then(() => bidOn(user(index), id, amount)),
+  Promise.resolve(),
+);
 
 beforeEach(() => {
   fake = createFakeFirestore();
@@ -1121,6 +1125,148 @@ test('a goal needs an admin, a real feature and a whole number', async () => {
   assert.equal('goal' in (await store.getFeature(1)), false);
 });
 
+const setDue = (id, date) => run('feature-due', admin, { id, date });
+
+test('a due date can be set, changed and removed, and the board is told', async () => {
+  const changed = [];
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
+  await addFeature('Signing');
+  changed.length = 0;
+
+  const set = await setDue(1, ' 2027-01-01 ');
+  assert.deepEqual(set, { text: '#1: the due date is now 2027-01-01.', hidden: true });
+  assert.equal((await store.getFeature(1)).due, '2027-01-01');
+
+  await setDue(1, '2028-02-29');
+  assert.equal((await store.getFeature(1)).due, '2028-02-29');
+
+  const removed = await setDue(1, '-');
+  assert.equal(removed.text, '#1: the due date was removed.');
+  assert.equal('due' in (await store.getFeature(1)), false);
+  assert.deepEqual(changed, [1, 1, 1]);
+});
+
+test('a due date needs an admin, a real feature and a real date', async () => {
+  await addFeature('Signing');
+  await addFeature('Gone');
+  await run('feature-remove', admin, { id: 2 });
+  const bad = 'Write the due date as YYYY-MM-DD, or - to remove it.';
+
+  assert.equal((await run('feature-due', alan, { id: 1, date: '2027-01-01' })).text, 'Only admins can do that.');
+  const dates = ['tomorrow', '2027-1-1', '2027-13-01', '2027-02-30', '2027-00-10', '2027/01/01', '', '  '];
+  const replies = await Promise.all(dates.map(date => setDue(1, date)));
+  replies.forEach((reply, at) => assert.equal(reply.text, bad, dates[at]));
+  assert.equal((await run('feature-due', admin, { id: 1 })).text, bad);
+  assert.equal((await setDue(2, '2027-01-01')).text, 'There is no feature #2.');
+  assert.equal((await setDue(9, '2027-01-01')).text, 'There is no feature #9.');
+  assert.equal('due' in (await store.getFeature(1)), false);
+});
+
+const setRepeat = (id, count, unit) => run('feature-repeat', admin, { id, count, unit });
+const NOV_14 = Date.UTC(2026, 10, 14, 12);
+
+test('a repeat can be set, changed and removed, and the board is told', async () => {
+  const changed = [];
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
+  await addFeature('Signing');
+  changed.length = 0;
+
+  const set = await setRepeat(1, 1, 'years');
+  assert.deepEqual(set, { text: '#1: the due date moves forward by 1 year on each cash-out.', hidden: true });
+  assert.deepEqual((await store.getFeature(1)).every, { count: 1, unit: 'years' });
+
+  const days = await setRepeat(1, 30, ' Days ');
+  assert.equal(days.text, '#1: the due date moves forward by 30 days on each cash-out.');
+  assert.deepEqual((await store.getFeature(1)).every, { count: 30, unit: 'days' });
+
+  const removed = await setRepeat(1, 0);
+  assert.equal(removed.text, '#1: the due date no longer repeats.');
+  assert.equal('every' in (await store.getFeature(1)), false);
+  assert.deepEqual(changed, [1, 1, 1]);
+});
+
+test('a repeat needs an admin, a real feature, a sensible number and a unit', async () => {
+  await addFeature('Signing');
+  await addFeature('Gone');
+  await run('feature-remove', admin, { id: 2 });
+
+  assert.equal((await run('feature-repeat', alan, { id: 1, count: 1, unit: 'years' })).text, 'Only admins can do that.');
+  const badNumber = 'The number must be a whole number from 0 to 1000.';
+  assert.equal((await setRepeat(1, -1, 'days')).text, badNumber);
+  assert.equal((await setRepeat(1, 1001, 'days')).text, badNumber);
+  assert.equal((await setRepeat(1, 1.5, 'days')).text, badNumber);
+  assert.equal((await run('feature-repeat', admin, { id: 1 })).text, badNumber);
+  assert.equal((await setRepeat(1, 2)).text, 'Say whether it repeats every 2 days, months or years.');
+  assert.equal((await setRepeat(1, 2, 'weeks')).text, 'Say whether it repeats every 2 days, months or years.');
+  assert.equal((await setRepeat(2, 1, 'years')).text, 'There is no feature #2.');
+  assert.equal((await setRepeat(9, 1, 'years')).text, 'There is no feature #9.');
+  assert.equal('every' in (await store.getFeature(1)), false);
+});
+
+test('a cash-out moves the due date forward by the span, and says where it landed', async () => {
+  service = build({ now: () => NOV_14 });
+  await addFeature('Signing');
+  await setDue(1, '2026-12-01');
+  await setRepeat(1, 1, 'years');
+  await bidAll(1, 60);
+
+  const reply = await run('feature-reset', admin, { id: 1 });
+
+  assert.equal(reply.text, 'Cashed out #1 Signing: 60 FMC from 1 bidder. It starts over at 0. Next due 2027-12-01.');
+  assert.equal((await store.getFeature(1)).due, '2027-12-01');
+});
+
+test('a cash-out that is late keeps the rhythm of the original date', async () => {
+  service = build({ now: () => NOV_14 });
+  await addFeature('Signing');
+  await setDue(1, '2025-12-01');
+  await setRepeat(1, 1, 'years');
+  await bidAll(1, 60);
+
+  await run('feature-reset', admin, { id: 1 });
+
+  assert.equal((await store.getFeature(1)).due, '2026-12-01');
+});
+
+test('a repeat without a due date counts from today', async () => {
+  service = build({ now: () => NOV_14 });
+  await addFeature('Signing');
+  await setRepeat(1, 3, 'months');
+  await bidAll(1, 60);
+
+  const reply = await run('feature-reset', admin, { id: 1 });
+
+  assert.match(reply.text, / Next due 2027-02-14\.$/);
+  assert.equal((await store.getFeature(1)).due, '2027-02-14');
+});
+
+test('a partial cash-out moves the due date too, and a refused one does not', async () => {
+  service = build({ now: () => NOV_14 });
+  await addFeature('Signing');
+  await setDue(1, '2026-12-01');
+  await setRepeat(1, 1, 'months');
+  await bidAll(1, 70, 60);
+
+  await run('feature-reset', admin, { id: 1, amount: 100 });
+  assert.equal((await store.getFeature(1)).due, '2026-12-01');
+
+  await run('feature-reset', admin, { id: 1, amount: 70 });
+  assert.equal((await store.getFeature(1)).due, '2027-01-01');
+  assert.equal((await store.getFeature(1)).history.length, 1);
+});
+
+test('without a repeat a cash-out leaves the due date alone and says nothing about it', async () => {
+  service = build({ now: () => NOV_14 });
+  await addFeature('Signing');
+  await setDue(1, '2026-12-01');
+  await bidAll(1, 60);
+
+  const reply = await run('feature-reset', admin, { id: 1 });
+
+  assert.equal(reply.text, 'Cashed out #1 Signing: 60 FMC from 1 bidder. It starts over at 0.');
+  assert.equal((await store.getFeature(1)).due, '2026-12-01');
+});
+
 test('the list and a bid reply show how far a goal has come', async () => {
   await addFeature('Signing');
   await addFeature('Plain');
@@ -1212,10 +1358,6 @@ test('only an admin can cash out, and only an open feature with confirmed bids',
   assert.equal('history' in (await store.getFeature(1)), false);
 });
 
-const bidAll = async (id, ...amounts) => amounts.reduce(
-  (chain, amount, index) => chain.then(() => bidOn(user(index), id, amount)),
-  Promise.resolve(),
-);
 const statuses = async id => (await store.bidsForFeature(id))
   .sort((a, b) => a.createdAt - b.createdAt)
   .map(bid => `${bid.amount}:${bid.status}`);

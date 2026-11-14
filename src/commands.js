@@ -112,6 +112,46 @@ const definitions = {
       },
     ],
   },
+  'feature-due': {
+    ...admin('due'),
+    description: 'Set the date a feature is due, as YYYY-MM-DD',
+    private: true,
+    args: [
+      id,
+      {
+        name: 'date',
+        description: 'The due date as YYYY-MM-DD, or - to remove it',
+        type: 'string',
+        required: true,
+      },
+    ],
+  },
+  'feature-repeat': {
+    ...admin('repeat'),
+    description: 'Move the due date forward by this much on each cash-out',
+    private: true,
+    args: [
+      id,
+      {
+        name: 'count',
+        description: 'How many days, months or years, or 0 to stop repeating',
+        type: 'integer',
+        required: true,
+        minValue: 0,
+        maxValue: 1000,
+      },
+      {
+        name: 'unit',
+        description: 'days, months or years',
+        type: 'string',
+        choices: [
+          { name: 'days', value: 'days' },
+          { name: 'months', value: 'months' },
+          { name: 'years', value: 'years' },
+        ],
+      },
+    ],
+  },
   'feature-reset': {
     ...admin('reset'),
     description: 'Cash out bids and start the feature over',

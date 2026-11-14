@@ -145,6 +145,34 @@ test('a goal shows its progress, and says so once it is met', () => {
   assert.equal(goalOf(120), '✅ Goal met: 120 / 100 FMC');
 });
 
+test('a due date is shown as a Discord timestamp while the feature is open', () => {
+  const open = render({
+    id: '1', title: 'Signing', status: 'open', due: '2027-01-01',
+  }, summarize([]));
+  const done = render({
+    id: '1', title: 'Signing', status: 'done', due: '2027-01-01',
+  }, summarize([]));
+
+  assert.deepEqual(open.fields.find(field => field.name === 'Due'), {
+    name: 'Due',
+    value: '<t:1798761600:D> (<t:1798761600:R>)',
+    inline: true,
+  });
+  assert.equal(done.fields.some(field => field.name === 'Due'), false);
+});
+
+test('a due date that repeats says how often', () => {
+  const dueField = every => render({
+    id: '1', title: 'Signing', status: 'open', due: '2027-01-01', every,
+  }, summarize([])).fields.find(field => field.name === 'Due').value;
+  const when = '<t:1798761600:D> (<t:1798761600:R>)';
+
+  assert.equal(dueField(undefined), when);
+  assert.equal(dueField({ count: 1, unit: 'years' }), `${when}\nRepeats every year`);
+  assert.equal(dueField({ count: 3, unit: 'months' }), `${when}\nRepeats every 3 months`);
+  assert.equal(dueField({ count: 1, unit: 'days' }), `${when}\nRepeats every day`);
+});
+
 test('a feature without a goal has no goal field, and one that was cashed out says how much', () => {
   const plain = render({ id: '1', title: 'A', status: 'open' }, summarize([]));
   const cashed = render({

@@ -1,3 +1,6 @@
+const {
+  MAX_COUNT, UNITS, rollDue, todayOf, validDate,
+} = require('./dates');
 const { render } = require('./embed');
 const { fmt, plural } = require('./format');
 const { pickBids } = require('./pick');
@@ -37,6 +40,8 @@ const tidyLines = text => String(text || '')
 const isId = id => Number.isSafeInteger(id) && id > 0;
 const badGoal = goal => !(Number.isSafeInteger(goal) && goal >= 0);
 const BAD_GOAL = 'The goal must be a whole number of FMC.';
+const BAD_DATE = `Write the due date as YYYY-MM-DD, or ${CLEAR} to remove it.`;
+const BAD_COUNT = `The number must be a whole number from 0 to ${MAX_COUNT}.`;
 const goalLine = (goal, total) => (goal ? `${fmt(total)} / ${fmt(goal)} FMC` : `${fmt(total)} FMC`);
 
 function goalNote(goal, total) {
@@ -80,6 +85,7 @@ module.exports = function createService({
   refresh = async () => null,
   resync = async () => null,
   onError = console.error,
+  now = Date.now,
 }) {
   const inFlight = new Set();
   const refundFailures = new Set();
@@ -351,6 +357,40 @@ module.exports = function createService({
     return shown(`#${id} ${feature.title} is done!${note}`, { embed, withText: true });
   }
 
+  async function setDue(ctx, { id, date }) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    const text = tidy(date);
+    const clearing = text === CLEAR;
+    if (!clearing && !validDate(text)) return hiddenReply(BAD_DATE);
+    const feature = isId(id) ? await store.getFeature(id) : null;
+    if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
+
+    await store.updateFeature(id, { due: clearing ? null : text });
+    const note = await boardNote(id);
+    const change = clearing ? 'the due date was removed' : `the due date is now ${text}`;
+    return hiddenReply(`#${id}: ${change}.${note}`);
+  }
+
+  async function setRepeat(ctx, { id, count, unit }) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    if (!Number.isSafeInteger(count) || count < 0 || count > MAX_COUNT) {
+      return hiddenReply(BAD_COUNT);
+    }
+    const named = String(unit || '').trim().toLowerCase();
+    if (count > 0 && !UNITS.includes(named)) {
+      return hiddenReply(`Say whether it repeats every ${count} days, months or years.`);
+    }
+    const feature = isId(id) ? await store.getFeature(id) : null;
+    if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
+
+    await store.updateFeature(id, { every: count === 0 ? null : { count, unit: named } });
+    const note = await boardNote(id);
+    const change = count === 0
+      ? 'the due date no longer repeats'
+      : `the due date moves forward by ${plural(count, named.slice(0, -1))} on each cash-out`;
+    return hiddenReply(`#${id}: ${change}.${note}`);
+  }
+
   async function reset(ctx, { id, amount }) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
     if (amount !== undefined && !(Number.isSafeInteger(amount) && amount > 0)) {
@@ -371,16 +411,19 @@ module.exports = function createService({
     if (sum !== target) return hiddenReply(noExactFit(id, target, sum, available));
 
     const { backers } = summarize(picked);
-    const { goal } = feature;
+    const { goal, every } = feature;
+    const today = todayOf(now());
+    const due = every ? rollDue(feature.due || today, every, today) : undefined;
     await store.cashOut(id, picked.map(item => item.id), {
       total: sum,
       backers,
       ...(goal ? { goal } : {}),
-    });
+    }, due);
     const note = await boardNote(id);
     const left = available - sum;
     const after = left ? `${fmt(left)} FMC stays on it for the next round.` : 'It starts over at 0.';
-    return shown(`Cashed out #${id} ${feature.title}: ${fmt(sum)} FMC from ${plural(backers, 'bidder')}. ${after}${note}`);
+    const next = due ? ` Next due ${due}.` : '';
+    return shown(`Cashed out #${id} ${feature.title}: ${fmt(sum)} FMC from ${plural(backers, 'bidder')}. ${after}${next}${note}`);
   }
 
   async function remove(ctx, { id }) {
@@ -417,6 +460,8 @@ module.exports = function createService({
     'feature-add': add,
     'feature-edit': edit,
     'feature-goal': setGoal,
+    'feature-due': setDue,
+    'feature-repeat': setRepeat,
     'feature-done': done,
     'feature-reset': reset,
     'feature-remove': remove,
