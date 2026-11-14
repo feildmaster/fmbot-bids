@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { DEFAULT_MIN_BID, parseConfig } = require('../src/config');
+const {
+  ADMINS_TEMPLATE, DEFAULT_MIN_BID, needsAdmins, parseConfig,
+} = require('../src/config');
 
 const alan = '208562116590960640';
 const sam = '110000000000000001';
@@ -52,6 +54,48 @@ test('a missing or odd config means no admins and nothing to report', () => {
     assert.equal(parsed.admins.size, 0, JSON.stringify(config));
     assert.equal(parsed.rejected.length, 0, JSON.stringify(config));
   });
+});
+
+const [PLACEHOLDER] = ADMINS_TEMPLATE;
+
+test('the placeholder alone means no admins and nothing to report', () => {
+  const { admins, rejected } = parseConfig({ admins: ADMINS_TEMPLATE });
+
+  assert.equal(admins.size, 0);
+  assert.deepEqual(rejected, []);
+});
+
+test('the placeholder can stay next to real admins, in any list shape', () => {
+  const list = parseConfig({ admins: [PLACEHOLDER, alan, ` ${PLACEHOLDER} `] });
+  const map = parseConfig({ admins: { 0: PLACEHOLDER, 1: alan } });
+
+  assert.deepEqual([...list.admins], [alan]);
+  assert.deepEqual(list.rejected, []);
+  assert.deepEqual([...map.admins], [alan]);
+  assert.deepEqual(map.rejected, []);
+});
+
+test('only the exact placeholder is let through, anything else odd is still reported', () => {
+  const { rejected } = parseConfig({
+    admins: [PLACEHOLDER, PLACEHOLDER.toUpperCase(), `${PLACEHOLDER}2`, 'placeholder', 'alan'],
+  });
+
+  assert.deepEqual(rejected, [PLACEHOLDER.toUpperCase(), `${PLACEHOLDER}2`, 'placeholder', 'alan']);
+});
+
+test('the placeholder is written when the config has no admins at all, and only then', () => {
+  [undefined, null, {}, 'text', 5, [], { minBid: 20 }].forEach((config) => {
+    assert.equal(needsAdmins(config), true, JSON.stringify(config));
+  });
+  [
+    { admins: ADMINS_TEMPLATE }, { admins: [alan] }, { admins: alan }, { admins: '' }, { admins: [] },
+  ].forEach((config) => {
+    assert.equal(needsAdmins(config), false, JSON.stringify(config));
+  });
+});
+
+test('the placeholder is the one vouchers writes', () => {
+  assert.deepEqual(ADMINS_TEMPLATE, ['<placeholder>']);
 });
 
 test('the smallest bid is ten unless the config says otherwise', () => {

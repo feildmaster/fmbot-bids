@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { validateCommands } = require('@basedakp48/plugin-utils');
+const { groupCommands, subcommandName, validateCommands } = require('@basedakp48/plugin-utils');
 const { definitions } = require('../src/commands');
 const privateReply = require('../src/reply');
 
@@ -10,7 +10,9 @@ test('the definitions pass the validation plugin-utils applies at startup', () =
 });
 
 test('the admin commands are hidden from people without server permissions', () => {
-  ['feature-add', 'feature-edit', 'feature-done', 'feature-remove', 'feature-sync'].forEach((name) => {
+  [
+    'feature-add', 'feature-edit', 'feature-goal', 'feature-done', 'feature-reset', 'feature-remove', 'feature-sync',
+  ].forEach((name) => {
     assert.deepEqual(
       definitions[name].discord,
       { dmPermission: false, defaultMemberPermissions: '32' },
@@ -22,12 +24,38 @@ test('the admin commands are hidden from people without server permissions', () 
   });
 });
 
+test('everyone commands share one group and admin commands another, with short subcommand names', () => {
+  const names = group => Object.keys(definitions)
+    .filter(name => definitions[name].group === group)
+    .map(name => subcommandName({ name, ...definitions[name] }))
+    .sort();
+
+  assert.deepEqual(names('feature'), ['bid', 'list', 'mine', 'show']);
+  assert.deepEqual(
+    names('feature-admin'),
+    ['add', 'done', 'edit', 'goal', 'remove', 'reset', 'sync'],
+  );
+  assert.equal(Object.values(definitions).every(item => item.group !== undefined), true);
+});
+
+test('every group is described and nothing in it is left without a name', () => {
+  const commands = Object.entries(definitions).map(([name, item]) => ({ name, ...item }));
+  const { groups, standalone, conflicts } = groupCommands(commands);
+
+  assert.deepEqual(conflicts, []);
+  assert.deepEqual(standalone, []);
+  assert.deepEqual(
+    groups.map(group => [group.name, group.description !== group.name]),
+    [['feature', true], ['feature-admin', true]],
+  );
+});
+
 test('only the commands that answer about you are private by default', () => {
   const privateOnes = Object.keys(definitions).filter(name => definitions[name].private === true);
 
   assert.deepEqual(
     privateOnes.sort(),
-    ['feature-bid', 'feature-edit', 'feature-mine', 'feature-remove', 'feature-sync'],
+    ['feature-bid', 'feature-edit', 'feature-goal', 'feature-mine', 'feature-remove', 'feature-sync'],
   );
 });
 
@@ -35,6 +63,8 @@ test('every command takes its arguments in the order the text form reads them', 
   assert.deepEqual(definitions['feature-bid'].args.map(arg => arg.name), ['id', 'amount', 'hidden']);
   assert.deepEqual(definitions['feature-add'].args.map(arg => arg.name), ['title', 'description']);
   assert.deepEqual(definitions['feature-edit'].args.map(arg => arg.name), ['id', 'title', 'description']);
+  assert.deepEqual(definitions['feature-goal'].args.map(arg => arg.name), ['id', 'amount']);
+  assert.deepEqual(definitions['feature-reset'].args.map(arg => arg.name), ['id', 'amount']);
   assert.deepEqual(definitions['feature-show'].args.map(arg => arg.name), ['id']);
   assert.deepEqual(definitions['feature-list'].args.map(arg => arg.name), ['private', 'status']);
 });

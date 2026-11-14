@@ -1,12 +1,18 @@
 const DEFAULT_MIN_BID = 10;
 const SNOWFLAKE = /^\d{15,25}$/;
 
+const isObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
 const asList = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') return [value];
   if (value && typeof value === 'object') return Object.values(value);
   return [];
 };
+
+const ADMINS_TEMPLATE = ['<placeholder>'];
+
+const needsAdmins = config => !isObject(config) || config.admins === undefined;
 
 function parseTarget(value, name) {
   if (value === undefined || value === null) return { [name]: null };
@@ -27,7 +33,7 @@ function parseConfig(config) {
   asList(source.admins).forEach((entry) => {
     const id = typeof entry === 'string' ? entry.trim() : undefined;
     if (id && SNOWFLAKE.test(id)) admins.add(id);
-    else rejected.push(entry);
+    else if (!ADMINS_TEMPLATE.includes(id)) rejected.push(entry);
   });
 
   const configured = Number(source.minBid);
@@ -42,4 +48,6 @@ function parseConfig(config) {
   };
 }
 
-module.exports = { DEFAULT_MIN_BID, parseConfig };
+module.exports = {
+  ADMINS_TEMPLATE, DEFAULT_MIN_BID, needsAdmins, parseConfig,
+};

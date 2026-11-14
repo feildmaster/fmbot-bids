@@ -5,10 +5,21 @@ const id = {
   required: true,
 };
 
-const adminOnly = { dmPermission: false, defaultMemberPermissions: '32' };
+const everyone = {
+  group: 'feature',
+  groupDescription: 'Bid on the features people want built',
+};
+
+const admin = subcommand => ({
+  group: 'feature-admin',
+  groupDescription: 'Add and manage the features people bid on',
+  subcommand,
+  discord: { dmPermission: false, defaultMemberPermissions: '32' },
+});
 
 const definitions = {
   'feature-list': {
+    ...everyone,
     description: 'List the features people are bidding on',
     args: [
       {
@@ -24,10 +35,12 @@ const definitions = {
     ],
   },
   'feature-show': {
+    ...everyone,
     description: 'Show a feature and who is backing it',
     args: [id],
   },
   'feature-bid': {
+    ...everyone,
     description: 'Put FMC behind a feature',
     private: true,
     args: [
@@ -46,10 +59,12 @@ const definitions = {
     ],
   },
   'feature-mine': {
+    ...everyone,
     description: 'Show your own bids',
     private: true,
   },
   'feature-add': {
+    ...admin('add'),
     description: 'Add a feature for people to bid on',
     args: [
       {
@@ -64,9 +79,9 @@ const definitions = {
         type: 'string',
       },
     ],
-    discord: adminOnly,
   },
   'feature-edit': {
+    ...admin('edit'),
     description: "Change a feature's title or description",
     private: true,
     args: [
@@ -82,23 +97,48 @@ const definitions = {
         type: 'string',
       },
     ],
-    discord: adminOnly,
+  },
+  'feature-goal': {
+    ...admin('goal'),
+    description: 'Set how much FMC a feature is aiming for',
+    private: true,
+    args: [
+      id,
+      {
+        name: 'amount',
+        description: 'The goal in FMC, or 0 to remove it',
+        type: 'integer',
+        required: true,
+      },
+    ],
+  },
+  'feature-reset': {
+    ...admin('reset'),
+    description: 'Cash out bids and start the feature over',
+    args: [
+      id,
+      {
+        name: 'amount',
+        description: 'How much FMC to cash out, everything by default',
+        type: 'integer',
+      },
+    ],
   },
   'feature-done': {
+    ...admin('done'),
     description: 'Mark a feature as built and close its bidding',
     args: [id],
-    discord: adminOnly,
   },
   'feature-remove': {
+    ...admin('remove'),
     description: 'Remove a feature and refund its bids',
     private: true,
     args: [id],
-    discord: adminOnly,
   },
   'feature-sync': {
+    ...admin('sync'),
     description: 'Post or refresh every feature on the board channel',
     private: true,
-    discord: adminOnly,
   },
 };
 

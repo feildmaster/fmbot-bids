@@ -2,10 +2,19 @@ const { fmt, plural } = require('./format');
 
 const COLORS = { open: 0x5865f2, done: 0x57f287, removed: 0xed4245 };
 const FOOTERS = {
-  open: id => `Open for bids · feature-bid ${id} <amount>`,
+  open: id => `Open for bids · feature bid ${id} <amount>`,
   done: () => 'Built',
   removed: () => 'Removed',
 };
+
+const BAR_WIDTH = 10;
+
+function progress(goal, total) {
+  if (total >= goal) return `✅ Goal met: ${fmt(total)} / ${fmt(goal)} FMC`;
+  const filled = Math.floor((total / goal) * BAR_WIDTH);
+  const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+  return `${bar} ${fmt(total)} / ${fmt(goal)} FMC`;
+}
 
 function render(feature, summary) {
   const fields = [];
@@ -17,6 +26,17 @@ function render(feature, summary) {
     });
     if (summary.top) {
       fields.push({ name: 'Top public backer', value: `${summary.top.name} ${fmt(summary.top.amount)}`, inline: true });
+    }
+    if (feature.goal) {
+      fields.push({ name: 'Goal', value: progress(feature.goal, summary.total) });
+    }
+    const history = feature.history || [];
+    if (history.length) {
+      const collected = history.reduce((sum, cycle) => sum + cycle.total, 0);
+      fields.push({
+        name: 'Cashed out',
+        value: `${fmt(collected)} FMC over ${plural(history.length, 'cycle')}`,
+      });
     }
   }
 

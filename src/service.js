@@ -1,5 +1,6 @@
 const { render } = require('./embed');
 const { fmt, plural } = require('./format');
+const { pickBids } = require('./pick');
 const { summarize } = require('./summary');
 
 const PROVIDER = 'discord.com';
@@ -10,7 +11,7 @@ const PAGE_SIZE = 10;
 const OPEN_COLOR = 0x5865f2;
 const DONE_COLOR = 0x57f287;
 const STALE_BOARD = ' The board could not be updated, so it may be out of date.';
-const RETRY_TEXT = "I couldn't confirm your bid with the wallet yet. It will be retried on its own, so check feature-mine in a few minutes before bidding again.";
+const RETRY_TEXT = "I couldn't confirm your bid with the wallet yet. It will be retried on its own, so check feature mine in a few minutes before bidding again.";
 
 const shown = (text, extra = {}) => ({ text, hidden: false, ...extra });
 const hiddenReply = (text, extra = {}) => ({ text, hidden: true, ...extra });
@@ -34,6 +35,23 @@ const tidyLines = text => String(text || '')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 const isId = id => Number.isSafeInteger(id) && id > 0;
+const badGoal = goal => !(Number.isSafeInteger(goal) && goal >= 0);
+const BAD_GOAL = 'The goal must be a whole number of FMC.';
+const goalLine = (goal, total) => (goal ? `${fmt(total)} / ${fmt(goal)} FMC` : `${fmt(total)} FMC`);
+
+function goalNote(goal, total) {
+  if (!goal) return '';
+  if (total >= goal) return ` The ${fmt(goal)} FMC goal is met.`;
+  return ` ${fmt(goal - total)} FMC to go.`;
+}
+
+function noExactFit(id, target, closest, available) {
+  const all = `leave the amount out to cash out all ${fmt(available)} FMC`;
+  const head = `#${id} can't pay out exactly ${fmt(target)} FMC without splitting a bid.`;
+  if (!closest) return `${head} No bid is small enough, but you can ${all}.`;
+  return `${head} The closest is ${fmt(closest)} FMC, or ${all}.`;
+}
+
 const requestIdOf = bid => `bid-${bid.id}`;
 
 function paginate(lines, title, color) {
@@ -154,7 +172,7 @@ module.exports = function createService({
   async function list(ctx, { status: asked, private: hide }) {
     const reply = hide === true ? hiddenReply : shown;
     const status = String(asked || 'open').toLowerCase();
-    if (!['open', 'done'].includes(status)) return reply('Use feature-list open or feature-list done.');
+    if (!['open', 'done'].includes(status)) return reply('Use feature list open or feature list done.');
 
     const [found, confirmed] = await Promise.all([
       store.listFeatures(status),
@@ -176,7 +194,7 @@ module.exports = function createService({
       })
       .sort((a, b) => b.total - a.total || Number(a.id) - Number(b.id));
     const lines = rows
-      .map(row => `#${row.id} ${row.title}: ${fmt(row.total)} FMC from ${plural(row.backers, 'bidder')}`);
+      .map(row => `#${row.id} ${row.title}: ${goalLine(row.goal, row.total)} from ${plural(row.backers, 'bidder')}`);
     const heading = status === 'open' ? 'Open features' : 'Finished features';
     return reply(`${heading}:\n${lines.join('\n')}`, {
       pages: paginate(lines, heading, status === 'open' ? OPEN_COLOR : DONE_COLOR),
@@ -260,8 +278,9 @@ module.exports = function createService({
       const total = totalOf(confirmed);
       const yours = totalOf(confirmed.filter(item => item.discordId === ctx.discordId));
       const placedText = `Bid placed: ${fmt(amount)} FMC on #${id} ${feature.title}${hidden === true ? ' (hidden)' : ''}.`;
-      if (yours === amount) return hiddenReply(`${placedText} It has ${fmt(total)} FMC behind it now.`);
-      return hiddenReply(`${placedText} You have ${fmt(yours)} FMC on it now, and ${fmt(total)} FMC is behind it in total.`);
+      const note = goalNote(feature.goal, total);
+      if (yours === amount) return hiddenReply(`${placedText} It has ${fmt(total)} FMC behind it now.${note}`);
+      return hiddenReply(`${placedText} You have ${fmt(yours)} FMC on it now, and ${fmt(total)} FMC is behind it in total.${note}`);
     } finally {
       inFlight.delete(ctx.discordId);
     }
@@ -276,7 +295,7 @@ module.exports = function createService({
     if (description.length > MAX_DESCRIPTION) return hiddenReply(`Keep the description under ${MAX_DESCRIPTION} characters.`);
     const id = await store.createFeature({ title, description, createdBy: ctx.discordId });
     const note = await boardNote(id);
-    return shown(`Added #${id}: ${title}. Bid on it with feature-bid ${id} <amount>.${note}`);
+    return shown(`Added #${id}: ${title}. Bid on it with feature bid ${id} <amount>.${note}`);
   }
 
   async function edit(ctx, { id, ...input }) {
@@ -307,6 +326,18 @@ module.exports = function createService({
     return hiddenReply(`#${id}: ${parts.join(', and ')}.${note}`);
   }
 
+  async function setGoal(ctx, { id, amount }) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    if (badGoal(amount)) return hiddenReply(BAD_GOAL);
+    const feature = isId(id) ? await store.getFeature(id) : null;
+    if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
+
+    await store.updateFeature(id, { goal: amount === 0 ? null : amount });
+    const note = await boardNote(id);
+    const change = amount === 0 ? 'the goal was removed' : `the goal is now ${fmt(amount)} FMC`;
+    return hiddenReply(`#${id}: ${change}.${note}`);
+  }
+
   async function done(ctx, { id }) {
     if (!ctx.admin) return hiddenReply('Only admins can do that.');
     const feature = isId(id) ? await store.getFeature(id) : null;
@@ -318,6 +349,38 @@ module.exports = function createService({
     const summary = summarize(await store.bidsForFeature(id));
     const embed = render({ ...feature, id, status: 'done' }, summary);
     return shown(`#${id} ${feature.title} is done!${note}`, { embed, withText: true });
+  }
+
+  async function reset(ctx, { id, amount }) {
+    if (!ctx.admin) return hiddenReply('Only admins can do that.');
+    if (amount !== undefined && !(Number.isSafeInteger(amount) && amount > 0)) {
+      return hiddenReply('Give a whole number of FMC to cash out, or leave the amount out to cash out everything.');
+    }
+    const feature = isId(id) ? await store.getFeature(id) : null;
+    if (!feature || feature.status === 'removed') return hiddenReply(`There is no feature #${id}.`);
+    if (feature.status !== 'open') return hiddenReply(`#${id} is ${feature.status}, so it can't be cashed out.`);
+
+    const confirmed = (await store.bidsForFeature(id)).filter(item => item.status === 'confirmed');
+    if (!confirmed.length) return hiddenReply(`#${id} has no confirmed bids to cash out.`);
+
+    const available = totalOf(confirmed);
+    const target = amount === undefined ? available : amount;
+    if (target > available) return hiddenReply(`#${id} only has ${fmt(available)} FMC to cash out.`);
+
+    const { picked, sum } = pickBids(confirmed, target);
+    if (sum !== target) return hiddenReply(noExactFit(id, target, sum, available));
+
+    const { backers } = summarize(picked);
+    const { goal } = feature;
+    await store.cashOut(id, picked.map(item => item.id), {
+      total: sum,
+      backers,
+      ...(goal ? { goal } : {}),
+    });
+    const note = await boardNote(id);
+    const left = available - sum;
+    const after = left ? `${fmt(left)} FMC stays on it for the next round.` : 'It starts over at 0.';
+    return shown(`Cashed out #${id} ${feature.title}: ${fmt(sum)} FMC from ${plural(backers, 'bidder')}. ${after}${note}`);
   }
 
   async function remove(ctx, { id }) {
@@ -353,7 +416,9 @@ module.exports = function createService({
     'feature-bid': placeBid,
     'feature-add': add,
     'feature-edit': edit,
+    'feature-goal': setGoal,
     'feature-done': done,
+    'feature-reset': reset,
     'feature-remove': remove,
     'feature-sync': sync,
   };

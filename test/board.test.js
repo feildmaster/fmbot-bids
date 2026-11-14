@@ -92,7 +92,7 @@ test('a feature with no bids shows zero and no top backer', () => {
     title: '#3 Dark mode',
     color: 0x5865f2,
     fields: [{ name: 'Backed by', value: '0 FMC from 0 bidders', inline: true }],
-    footer: { text: 'Open for bids · feature-bid 3 <amount>' },
+    footer: { text: 'Open for bids · feature bid 3 <amount>' },
   });
 });
 
@@ -126,6 +126,40 @@ test('a finished feature is green and says it was built, and a description is sh
   assert.equal(embed.color, 0x57f287);
   assert.equal(embed.footer.text, 'Built');
   assert.equal(embed.description, 'As a CSV file');
+});
+
+test('a goal shows its progress, and says so once it is met', () => {
+  const bidOf = amount => ({
+    status: 'confirmed', discordId: '1', name: 'Alan', amount, hidden: false, createdAt: 1,
+  });
+  const goalOf = (total) => {
+    const embed = render({
+      id: '1', title: 'Signing', status: 'open', goal: 100,
+    }, summarize([bidOf(total)]));
+    return embed.fields.find(field => field.name === 'Goal').value;
+  };
+
+  assert.equal(goalOf(40), '████░░░░░░ 40 / 100 FMC');
+  assert.equal(goalOf(99), '█████████░ 99 / 100 FMC');
+  assert.equal(goalOf(100), '✅ Goal met: 100 / 100 FMC');
+  assert.equal(goalOf(120), '✅ Goal met: 120 / 100 FMC');
+});
+
+test('a feature without a goal has no goal field, and one that was cashed out says how much', () => {
+  const plain = render({ id: '1', title: 'A', status: 'open' }, summarize([]));
+  const cashed = render({
+    id: '1',
+    title: 'A',
+    status: 'open',
+    history: [{ total: 120, backers: 3 }, { total: 80, backers: 2 }],
+  }, summarize([]));
+
+  assert.equal(plain.fields.some(field => field.name === 'Goal'), false);
+  assert.equal(plain.fields.some(field => field.name === 'Cashed out'), false);
+  assert.deepEqual(cashed.fields.find(field => field.name === 'Cashed out'), {
+    name: 'Cashed out',
+    value: '200 FMC over 2 cycles',
+  });
 });
 
 test('the embed never carries an undefined value, which the database would refuse', () => {

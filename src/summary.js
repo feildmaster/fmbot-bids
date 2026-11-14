@@ -24,4 +24,4 @@ function summarize(bids) {
   };
 }
 
-module.exports = { summarize };
+module.exports = { millis, summarize };

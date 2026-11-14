@@ -2,7 +2,9 @@ const utils = require('@basedakp48/plugin-utils');
 const admin = require('firebase-admin');
 const createBoard = require('./src/board');
 const { definitions } = require('./src/commands');
-const { DEFAULT_MIN_BID, parseConfig } = require('./src/config');
+const {
+  ADMINS_TEMPLATE, DEFAULT_MIN_BID, needsAdmins, parseConfig,
+} = require('./src/config');
 const createLog = require('./src/log');
 const privateReply = require('./src/reply');
 const createService = require('./src/service');
@@ -37,6 +39,7 @@ const log = createLog({
 });
 
 plugin.on('config', (config) => {
+  if (needsAdmins(config)) plugin.config.child('admins').set(ADMINS_TEMPLATE).catch(report);
   const parsed = parseConfig(config);
   admins = parsed.admins;
   minimum = parsed.minBid;

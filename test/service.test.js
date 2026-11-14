@@ -67,8 +67,8 @@ test('an admin adds features, numbered in order, and the answer is public', asyn
   const first = await addFeature('Dark mode');
   const second = await addFeature('  Export   to   CSV ');
 
-  assert.deepEqual(first, { text: 'Added #1: Dark mode. Bid on it with feature-bid 1 <amount>.', hidden: false });
-  assert.equal(second.text, 'Added #2: Export to CSV. Bid on it with feature-bid 2 <amount>.');
+  assert.deepEqual(first, { text: 'Added #1: Dark mode. Bid on it with feature bid 1 <amount>.', hidden: false });
+  assert.equal(second.text, 'Added #2: Export to CSV. Bid on it with feature bid 2 <amount>.');
 });
 
 test('only the people on the admin list can add, finish or remove features', async () => {
@@ -103,7 +103,7 @@ test('a description is optional and is tidied like the title', async () => {
   const without = await run('feature-add', admin, { title: 'Export' });
   const empty = await run('feature-add', admin, { title: 'Import', description: '   ' });
 
-  assert.equal(withOne.text, 'Added #1: Dark mode. Bid on it with feature-bid 1 <amount>.');
+  assert.equal(withOne.text, 'Added #1: Dark mode. Bid on it with feature bid 1 <amount>.');
   assert.equal((await store.getFeature(1)).description, 'For night owls');
   assert.equal(without.hidden, false);
   assert.equal('description' in (await store.getFeature(2)), false);
@@ -144,7 +144,7 @@ test('feature-show carries the same embed the board shows', async () => {
       { name: 'Backed by', value: '160 FMC from 2 bidders', inline: true },
       { name: 'Top public backer', value: 'Alan 100', inline: true },
     ],
-    footer: { text: 'Open for bids · feature-bid 1 <amount>' },
+    footer: { text: 'Open for bids · feature bid 1 <amount>' },
   });
 });
 
@@ -301,7 +301,7 @@ test('finished features are listed in green', async () => {
 });
 
 test('the list only understands open and done', async () => {
-  assert.equal((await run('feature-list', alan, { status: 'everything' })).text, 'Use feature-list open or feature-list done.');
+  assert.equal((await run('feature-list', alan, { status: 'everything' })).text, 'Use feature list open or feature list done.');
 });
 
 test('a bid charges the bidder through the wallet and answers privately', async () => {
@@ -1006,7 +1006,7 @@ test('an admin is told when the board could not be updated, and the change stays
   await addFeature('C');
   const removed = await run('feature-remove', admin, { id: 2 });
 
-  assert.equal(added.text, `Added #1: A. Bid on it with feature-bid 1 <amount>.${stale}`);
+  assert.equal(added.text, `Added #1: A. Bid on it with feature bid 1 <amount>.${stale}`);
   assert.equal(edited.text, `#1: the title is now "B".${stale}`);
   assert.equal(finished.text, `#1 B is done!${stale}`);
   assert.equal(removed.text, `Removed #2: C.${stale}`);
@@ -1026,7 +1026,7 @@ test('a board that throws is reported and does not undo the change', async () =>
 test('no board, or a board that is up to date, adds nothing to the answer', async () => {
   const none = build({ refresh: async () => null });
   service = none;
-  assert.equal((await addFeature('A')).text, 'Added #1: A. Bid on it with feature-bid 1 <amount>.');
+  assert.equal((await addFeature('A')).text, 'Added #1: A. Bid on it with feature bid 1 <amount>.');
 });
 
 test('the wallet request id comes from the bid id, also for bids that stored one', async () => {
@@ -1084,6 +1084,229 @@ test('feature-sync says so when there is no board to sync', async () => {
   service = build({ resync: async () => null });
 
   assert.match((await run('feature-sync', admin)).text, /^The board isn't set up\./);
+});
+
+const setGoal = (id, amount) => run('feature-goal', admin, { id, amount });
+
+test('a goal can be set, changed and removed, and the board is told', async () => {
+  const changed = [];
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
+  await addFeature('Signing');
+  changed.length = 0;
+
+  const set = await setGoal(1, 100);
+  assert.deepEqual(set, { text: '#1: the goal is now 100 FMC.', hidden: true });
+  assert.equal((await store.getFeature(1)).goal, 100);
+
+  await setGoal(1, 2500);
+  assert.equal((await store.getFeature(1)).goal, 2500);
+
+  const removed = await setGoal(1, 0);
+  assert.equal(removed.text, '#1: the goal was removed.');
+  assert.equal('goal' in (await store.getFeature(1)), false);
+  assert.deepEqual(changed, [1, 1, 1]);
+});
+
+test('a goal needs an admin, a real feature and a whole number', async () => {
+  await addFeature('Signing');
+  await addFeature('Gone');
+  await run('feature-remove', admin, { id: 2 });
+
+  assert.equal((await run('feature-goal', alan, { id: 1, amount: 100 })).text, 'Only admins can do that.');
+  assert.equal((await setGoal(1, -5)).text, 'The goal must be a whole number of FMC.');
+  assert.equal((await setGoal(1, 1.5)).text, 'The goal must be a whole number of FMC.');
+  assert.equal((await run('feature-goal', admin, { id: 1 })).text, 'The goal must be a whole number of FMC.');
+  assert.equal((await setGoal(2, 100)).text, 'There is no feature #2.');
+  assert.equal((await setGoal(9, 100)).text, 'There is no feature #9.');
+  assert.equal('goal' in (await store.getFeature(1)), false);
+});
+
+test('the list and a bid reply show how far a goal has come', async () => {
+  await addFeature('Signing');
+  await addFeature('Plain');
+  await setGoal(1, 100);
+
+  const first = await bidOn(alan, 1, 40);
+  const second = await bidOn(sam, 1, 70);
+  await bidOn(alan, 2, 20);
+
+  assert.match(first.text, / 60 FMC to go\.$/);
+  assert.match(second.text, / The 100 FMC goal is met\.$/);
+  const list = await run('feature-list', alan);
+  assert.match(list.text, /#1 Signing: 110 \/ 100 FMC from 2 bidders/);
+  assert.match(list.text, /#2 Plain: 20 FMC from 1 bidder/);
+});
+
+test('cashing out a feature collects its bids and starts the count over', async () => {
+  const changed = [];
+  service = build({ refresh: async (id) => { changed.push(id); return 'updated'; } });
+  await addFeature('Signing');
+  await setGoal(1, 100);
+  await bidOn(alan, 1, 60);
+  await bidOn(sam, 1, 50);
+  changed.length = 0;
+
+  const reply = await run('feature-reset', admin, { id: 1 });
+
+  assert.deepEqual(reply, {
+    text: 'Cashed out #1 Signing: 110 FMC from 2 bidders. It starts over at 0.',
+    hidden: false,
+  });
+  assert.deepEqual(changed, [1]);
+  assert.deepEqual((await store.bidsForFeature(1)).map(bid => bid.status), ['collected', 'collected']);
+  const feature = await store.getFeature(1);
+  assert.equal(feature.status, 'open');
+  assert.equal(feature.history.length, 1);
+  assert.deepEqual({ ...feature.history[0], closedAt: undefined }, {
+    total: 110, backers: 2, goal: 100, closedAt: undefined,
+  });
+
+  const shownNow = await run('feature-show', alan, { id: 1 });
+  assert.equal(shownNow.text.includes('No bids yet.'), true);
+  assert.equal(shownNow.embed.fields.find(field => field.name === 'Goal').value, '░░░░░░░░░░ 0 / 100 FMC');
+  assert.equal(shownNow.embed.fields.find(field => field.name === 'Cashed out').value, '110 FMC over 1 cycle');
+});
+
+test('a cycle below the goal is cashed out like any other, and a feature without a goal records no goal', async () => {
+  await addFeature('Signing');
+  await setGoal(1, 100);
+  await addFeature('Plain');
+  await bidOn(alan, 1, 30);
+  await bidOn(alan, 2, 30);
+
+  const short = await run('feature-reset', admin, { id: 1 });
+  const plain = await run('feature-reset', admin, { id: 2 });
+
+  assert.equal(short.text, 'Cashed out #1 Signing: 30 FMC from 1 bidder. It starts over at 0.');
+  assert.equal(plain.text, 'Cashed out #2 Plain: 30 FMC from 1 bidder. It starts over at 0.');
+  assert.equal((await store.getFeature(1)).history[0].goal, 100);
+  assert.equal('goal' in (await store.getFeature(2)).history[0], false);
+});
+
+test('a second cycle starts at zero and is cashed out on its own', async () => {
+  await addFeature('Signing');
+  await setGoal(1, 100);
+  await bidOn(alan, 1, 50);
+  await run('feature-reset', admin, { id: 1 });
+
+  const again = await bidOn(alan, 1, 20);
+  assert.match(again.text, /It has 20 FMC behind it now\. 80 FMC to go\.$/);
+  await run('feature-reset', admin, { id: 1 });
+
+  assert.deepEqual((await store.getFeature(1)).history.map(entry => entry.total), [50, 20]);
+});
+
+test('only an admin can cash out, and only an open feature with confirmed bids', async () => {
+  await addFeature('Signing');
+  await addFeature('Built');
+  await addFeature('Gone');
+  await bidOn(alan, 2, 30);
+  await run('feature-done', admin, { id: 2 });
+  await run('feature-remove', admin, { id: 3 });
+
+  assert.equal((await run('feature-reset', alan, { id: 1 })).text, 'Only admins can do that.');
+  assert.equal((await run('feature-reset', admin, { id: 1 })).text, '#1 has no confirmed bids to cash out.');
+  assert.equal((await run('feature-reset', admin, { id: 2 })).text, "#2 is done, so it can't be cashed out.");
+  assert.equal((await run('feature-reset', admin, { id: 3 })).text, 'There is no feature #3.');
+  assert.equal((await run('feature-reset', admin, { id: 9 })).text, 'There is no feature #9.');
+  assert.equal('history' in (await store.getFeature(1)), false);
+});
+
+const bidAll = async (id, ...amounts) => amounts.reduce(
+  (chain, amount, index) => chain.then(() => bidOn(user(index), id, amount)),
+  Promise.resolve(),
+);
+const statuses = async id => (await store.bidsForFeature(id))
+  .sort((a, b) => a.createdAt - b.createdAt)
+  .map(bid => `${bid.amount}:${bid.status}`);
+
+test('cashing out an amount takes whole bids that add up to it and leaves the rest', async () => {
+  await addFeature('Signing');
+  await setGoal(1, 100);
+  await bidAll(1, 60, 50, 40);
+
+  const reply = await run('feature-reset', admin, { id: 1, amount: 100 });
+
+  assert.equal(
+    reply.text,
+    'Cashed out #1 Signing: 100 FMC from 2 bidders. 50 FMC stays on it for the next round.',
+  );
+  assert.deepEqual(await statuses(1), ['60:collected', '50:confirmed', '40:collected']);
+  const feature = await store.getFeature(1);
+  assert.deepEqual({ ...feature.history[0], closedAt: undefined }, {
+    total: 100, backers: 2, goal: 100, closedAt: undefined,
+  });
+
+  const shownNow = await run('feature-show', alan, { id: 1 });
+  assert.equal(shownNow.embed.fields.find(field => field.name === 'Goal').value, '█████░░░░░ 50 / 100 FMC');
+});
+
+test('cashing out finds a combination of later bids rather than splitting one', async () => {
+  await addFeature('Signing');
+  await bidAll(1, 60, 50, 50);
+
+  const reply = await run('feature-reset', admin, { id: 1, amount: 100 });
+
+  assert.match(reply.text, /^Cashed out #1 Signing: 100 FMC from 2 bidders\. 60 FMC stays on it/);
+  assert.deepEqual(await statuses(1), ['60:confirmed', '50:collected', '50:collected']);
+});
+
+test('an amount that whole bids cannot make is refused, with the closest one named', async () => {
+  await addFeature('Signing');
+  await bidAll(1, 70, 60);
+
+  const near = await run('feature-reset', admin, { id: 1, amount: 100 });
+  const none = await run('feature-reset', admin, { id: 1, amount: 50 });
+
+  assert.equal(near.text, "#1 can't pay out exactly 100 FMC without splitting a bid. The closest is 70 FMC, or leave the amount out to cash out all 130 FMC.");
+  assert.equal(none.text, "#1 can't pay out exactly 50 FMC without splitting a bid. No bid is small enough, but you can leave the amount out to cash out all 130 FMC.");
+  assert.deepEqual(await statuses(1), ['70:confirmed', '60:confirmed']);
+  assert.equal('history' in (await store.getFeature(1)), false);
+});
+
+test('cashing out the whole total by amount is the same as leaving it out', async () => {
+  await addFeature('Signing');
+  await bidAll(1, 70, 60);
+
+  const reply = await run('feature-reset', admin, { id: 1, amount: 130 });
+
+  assert.equal(reply.text, 'Cashed out #1 Signing: 130 FMC from 2 bidders. It starts over at 0.');
+  assert.deepEqual(await statuses(1), ['70:collected', '60:collected']);
+});
+
+test('an amount must be a whole positive number and no more than the bids hold', async () => {
+  await addFeature('Signing');
+  await bidAll(1, 70);
+  const odd = 'Give a whole number of FMC to cash out, or leave the amount out to cash out everything.';
+
+  assert.equal((await run('feature-reset', admin, { id: 1, amount: 0 })).text, odd);
+  assert.equal((await run('feature-reset', admin, { id: 1, amount: -10 })).text, odd);
+  assert.equal((await run('feature-reset', admin, { id: 1, amount: 2.5 })).text, odd);
+  assert.equal((await run('feature-reset', admin, { id: 1, amount: 71 })).text, '#1 only has 70 FMC to cash out.');
+  assert.deepEqual(await statuses(1), ['70:confirmed']);
+});
+
+test('what stays after a partial cash out can still be refunded in full', async () => {
+  await addFeature('Signing');
+  await bidAll(1, 60, 50, 40);
+  await run('feature-reset', admin, { id: 1, amount: 100 });
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.deepEqual(refunds.map(refund => refund.uid), ['discord.com:::101']);
+});
+
+test('cashed out bids are never refunded, only the current cycle is', async () => {
+  await addFeature('Signing');
+  await bidOn(alan, 1, 50);
+  await run('feature-reset', admin, { id: 1 });
+  await bidOn(sam, 1, 30);
+
+  await run('feature-remove', admin, { id: 1 });
+  await service.idle();
+
+  assert.deepEqual(refunds.map(refund => refund.uid), ['discord.com:::2']);
 });
 
 test('feature-sync with one feature is worded for one', async () => {
